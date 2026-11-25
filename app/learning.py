@@ -415,14 +415,39 @@ def today() -> dict:
             action = "开始第一课" if index == 1 else f"开始第 {index} 课"
             page = "vocab"
         else:
-            action = f"继续：{seed.STEP_ZH[step]}"
+            action = "去复盘" if step == "recap" else f"继续：{seed.STEP_ZH[step]}"
             page = {"vocab": "vocab", "listen": "reading", "talk": "talk", "recap": "today"}.get(step, "today")
+        lessons = []
+        for item in seed.LESSONS:
+            item_progress = _progress_out(_progress_row(connection, item["id"]), item["id"])
+            no = seed.lesson_index(item["id"])
+            if item_progress["step"] == "done":
+                status = "done"
+                label = "已完成"
+            elif item["id"] == lesson["id"] and not all_done:
+                status = "current"
+                label = seed.STEP_ZH.get(item_progress["step"], item_progress["step"])
+            else:
+                status = "upcoming"
+                label = "还没开始"
+            lessons.append(
+                {
+                    "id": item["id"],
+                    "title_zh": item["title_zh"],
+                    "lesson_no": no,
+                    "step": item_progress["step"],
+                    "status": status,
+                    "label": label,
+                }
+            )
         return {
             "lesson_id": lesson["id"],
             "title_zh": lesson["title_zh"],
             "level": lesson["level"],
             "lesson_no": index,
             "lesson_total": len(seed.LESSONS),
+            "has_next": (not all_done) and index < len(seed.LESSONS),
+            "lessons": lessons,
             "progress": progress,
             "due_count": due,
             "action": action,

@@ -39,6 +39,22 @@ class LearningDbTest(unittest.TestCase):
         self.assertIn("咖啡", coffee["note_zh"])
         self.assertTrue(coffee["example_en"])
 
+    def test_vocab_phase_done_stays_on_vocab(self):
+        saved = self.learning.save_progress(
+            self.seed.LESSON_ID,
+            {"step": "vocab", "vocab_index": 4, "vocab_phase": "done"},
+        )
+        self.assertEqual(saved["step"], "vocab")
+        self.assertEqual(saved["vocab_phase"], "done")
+        today = self.learning.today()
+        self.assertEqual(today["page"], "vocab")
+        self.assertEqual(today["action"], "继续：词汇")
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as raised:
+            self.learning.save_progress(self.seed.LESSON_ID, {"step": "vocab", "vocab_phase": "nope"})
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_vocab_starts_in_learn_phase(self):
         today = self.learning.today()
         self.assertEqual(today["progress"]["vocab_phase"], "learn")
@@ -125,6 +141,15 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(today["lesson_no"], 1)
         self.assertEqual(today["lesson_total"], 3)
         self.assertEqual(today["action"], "开始第一课")
+        self.assertTrue(today["has_next"])
+        self.assertEqual([item["status"] for item in today["lessons"]], ["current", "upcoming", "upcoming"])
+
+    def test_today_recap_action_finishes_lesson(self):
+        self.learning.save_progress(self.seed.LESSON_ID, {"step": "recap"})
+        today = self.learning.today()
+        self.assertEqual(today["action"], "去复盘")
+        self.assertEqual(today["page"], "today")
+        self.assertTrue(today["has_next"])
 
     def test_today_advances_after_cafe_done(self):
         self.learning.save_progress(self.seed.LESSON_ID, {"step": "done"})
@@ -132,6 +157,8 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(today["lesson_id"], "greetings-a1")
         self.assertEqual(today["title_zh"], "问候")
         self.assertEqual(today["action"], "开始第 2 课")
+        self.assertTrue(today["has_next"])
+        self.assertEqual([item["status"] for item in today["lessons"]], ["done", "current", "upcoming"])
         overview = self.learning.progress_overview()
         self.assertEqual([item["id"] for item in overview["completed_lessons"]], ["cafe-order-a1"])
         month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")
@@ -143,6 +170,8 @@ class LearningDbTest(unittest.TestCase):
         today = self.learning.today()
         self.assertEqual(today["lesson_id"], "say-again-a1")
         self.assertEqual(today["action"], "再看这一课")
+        self.assertFalse(today["has_next"])
+        self.assertTrue(all(item["status"] == "done" for item in today["lessons"]))
         overview = self.learning.progress_overview()
         self.assertEqual(len(overview["completed_lessons"]), 3)
         month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")

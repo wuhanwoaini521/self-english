@@ -25,6 +25,9 @@ const state = {
   hideZh: false,
   talkDraft: "",
   talkLessonId: "",
+  talkJustSubmitted: false,
+  openLessonId: "",
+  aimRecap: false,
 };
 
 const view = document.querySelector("#view");
@@ -133,7 +136,8 @@ async function loadCore() {
   render();
   try {
     state.today = await api("/api/today");
-    state.lesson = await api(`/api/lessons/${state.today.lesson_id}`);
+    const lessonId = state.openLessonId || state.today.lesson_id;
+    state.lesson = await api(`/api/lessons/${lessonId}`);
     state.hideZh = Boolean(state.lesson.progress.hide_zh);
     if (state.page === "talk") state.dialogue = await api(`/api/dialogue/${state.lesson.id}`);
     if (state.page === "progress") state.overview = await api("/api/progress");
@@ -200,17 +204,94 @@ function speakButton(text) {
   return wrap;
 }
 
-function continueLesson() {
-  const step = progress()?.step || "vocab";
+const STEP_ORDER = ["vocab", "listen", "talk", "recap", "done"];
+
+function stepIndex(step) {
+  const index = STEP_ORDER.indexOf(step || "vocab");
+  return index < 0 ? 0 : index;
+}
+
+function reached(step) {
+  return stepIndex(progress()?.step) >= stepIndex(step);
+}
+
+function visitStep(step) {
   if (step === "listen") go("reading");
   else if (step === "talk") go("talk");
-  else if (step === "recap") go("today");
+  else if (step === "recap" || step === "done") {
+    state.aimRecap = true;
+    if (state.page === "today") {
+      render();
+    } else go("today");
+  } else go("vocab");
+}
+
+async function advanceTo(step) {
+  if (!reached(step)) await saveProgress({ step });
+  visitStep(step);
+}
+
+async function finishLesson() {
+  if (progress()?.step === "done") {
+    state.openLessonId = "";
+    await loadCore();
+    return;
+  }
+  state.openLessonId = "";
+  await saveProgress({ step: "done" });
+  await loadCore();
+}
+
+function continueLesson() {
+  const step = progress()?.step || "vocab";
+  if (step === "recap") visitStep("recap");
   else if (step === "done") go("progress");
-  else go("vocab");
+  else visitStep(step);
+}
+
+async function openLesson(lessonId) {
+  state.openLessonId = lessonId;
+  state.flipped = false;
+  try {
+    state.lesson = await api(`/api/lessons/${lessonId}`);
+    if (state.page === "talk") state.dialogue = await api(`/api/dialogue/${lessonId}`);
+    visitStep(progress()?.step || "vocab");
+    if (state.page === "today") render();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+function renderStepNav() {
+  const nav = document.createElement("nav");
+  nav.className = "step-nav";
+  nav.setAttribute("aria-label", "本课步骤");
+  const recapOn = state.page === "today" && reached("recap");
+  [
+    { id: "vocab", page: "vocab", label: "词汇" },
+    { id: "listen", page: "reading", label: "听读" },
+    { id: "talk", page: "talk", label: "对话" },
+    { id: "recap", page: "today", label: "复盘" },
+  ].forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    const isOn = item.id === "recap" ? recapOn : state.page === item.page;
+    button.className = "step-nav-btn" + (isOn ? " is-on" : "");
+    button.textContent = item.label;
+    if (!reached(item.id)) {
+      button.disabled = true;
+      button.title = "还没走到这一步";
+    } else {
+      button.addEventListener("click", () => visitStep(item.id));
+    }
+    nav.append(button);
+  });
+  return nav;
 }
 
 function renderToday() {
   const root = document.createDocumentFragment();
+  if (state.lesson) root.append(renderStepNav());
   const due = state.due || [];
   if (due.length) {
     const card = state.flipped ? due[0] : due[0];
@@ -263,30 +344,88 @@ function renderToday() {
   }
   const lesson = document.createElement("section");
   lesson.className = "card";
+  const viewingOther = Boolean(state.lesson && state.lesson.id !== state.today.lesson_id);
   const kicker = document.createElement("p");
   kicker.className = "kicker";
-  kicker.textContent = `${state.today.level} · 第 ${state.today.lesson_no} 课`;
+  kicker.textContent = viewingOther
+    ? `${state.lesson.level || "A1"} · 回去看`
+    : `${state.today.level} · 第 ${state.today.lesson_no} 课`;
   const title = document.createElement("h1");
-  title.textContent = state.today.title_zh;
+  title.textContent = viewingOther ? state.lesson.title_zh : state.today.title_zh;
   const source = document.createElement("p");
   source.className = "audio-tag";
   source.textContent = state.lesson?.source_note || "原创种子课。朗读为系统朗读。";
   const action = document.createElement("button");
   action.type = "button";
   action.className = "primary";
-  action.textContent = state.today.action;
-  action.addEventListener("click", continueLesson);
-  lesson.append(kicker, title, source, action);
+  if (viewingOther) {
+    action.textContent = "回到正在学的课";
+    action.addEventListener("click", async () => {
+      state.openLessonId = "";
+      await loadCore();
+    });
+  } else {
+    action.textContent = state.today.action;
+    action.addEventListener("click", continueLesson);
+  }
+  const note = document.createElement("p");
+  note.className = "audio-tag";
+  note.textContent = "没有每天上限。一课很短，想多学就接着下一课；词句库也可以随时看。";
+  lesson.append(kicker, title, source, note, action);
   root.append(lesson);
-  if (progress()?.step === "recap" || progress()?.step === "done") root.append(renderRecap());
+  if (reached("recap")) root.append(renderRecap());
+  const queue = state.today.lessons || [];
+  if (queue.length) {
+    const month = document.createElement("section");
+    month.className = "card";
+    const monthTitle = document.createElement("h2");
+    monthTitle.textContent = "这个月";
+    const monthHelp = document.createElement("p");
+    monthHelp.className = "audio-tag";
+    monthHelp.textContent = "点已学过的课可以回去看。同一天可以连续学完。";
+    const list = document.createElement("ul");
+    list.className = "list";
+    queue.forEach((item) => {
+      const row = document.createElement("li");
+      const locked = item.status === "upcoming";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "today-lesson-btn is-" + item.status;
+      btn.disabled = locked;
+      const name = document.createElement("p");
+      name.className = "english";
+      name.style.fontSize = "1.05rem";
+      name.textContent = `${item.lesson_no}. ${item.title_zh}`;
+      const status = document.createElement("p");
+      status.className = "audio-tag";
+      status.textContent = locked
+        ? item.label
+        : item.status === "current"
+          ? `正在学 · ${item.label} · 点这里继续`
+          : "已完成 · 点这里回去看";
+      btn.append(name, status);
+      if (!locked) btn.addEventListener("click", () => openLesson(item.id));
+      row.append(btn);
+      list.append(row);
+    });
+    month.append(monthTitle, monthHelp, list);
+    root.append(month);
+  }
   return root;
 }
 
 function renderRecap() {
   const panel = document.createElement("section");
   panel.className = "card";
-  panel.innerHTML = `<p class="kicker">复盘</p><h2>本课表达</h2>
-    <p class="audio-tag">学词汇时评分会进入复习。这里还可以再加。</p>`;
+  panel.id = "lesson-recap";
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  kicker.textContent = "复盘";
+  const title = document.createElement("h2");
+  title.textContent = "本课表达";
+  const help = document.createElement("p");
+  help.className = "audio-tag";
+  help.textContent = "对照一下刚学的词。学词汇时评过的已经在复习里。要回去改对话，点返回。";
   const list = document.createElement("ul");
   list.className = "list";
   (state.lesson.expressions || []).forEach((item) => {
@@ -312,16 +451,34 @@ function renderRecap() {
     row.append(en, zh, button);
     list.append(row);
   });
+  const actions = document.createElement("div");
+  actions.className = "talk-actions";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "返回对话";
+  back.addEventListener("click", () => visitStep("talk"));
   const done = document.createElement("button");
   done.type = "button";
   done.className = "primary";
-  done.textContent = progress()?.step === "done" ? "这一课已经完成" : "完成本课";
-  done.disabled = progress()?.step === "done";
-  done.addEventListener("click", async () => {
-    await saveProgress({ step: "done" });
-    go("progress");
-  });
-  panel.append(list, done);
+  const already = progress()?.step === "done";
+  const viewingOther = Boolean(state.openLessonId && state.openLessonId !== state.today.lesson_id);
+  const hasNext = Boolean(state.today?.has_next);
+  if (already) {
+    done.textContent = viewingOther ? "回到正在学的课" : "这一课已经完成";
+    done.disabled = !viewingOther;
+    if (viewingOther) {
+      done.addEventListener("click", async () => {
+        state.openLessonId = "";
+        await loadCore();
+      });
+    }
+  } else {
+    done.textContent = hasNext ? "完成本课，接着下一课" : "完成本课";
+    done.addEventListener("click", () => finishLesson());
+  }
+  actions.append(back, done);
+  panel.append(kicker, title, help, list, actions);
   return panel;
 }
 
@@ -345,17 +502,58 @@ function renderVocab() {
     });
     tabs.append(button);
   });
+  if (!state.library) root.append(renderStepNav());
   root.append(tabs);
   if (state.library) {
     root.append(renderLibrary());
     return root;
   }
   const items = state.lesson.expressions;
+  const phase = progress()?.vocab_phase || "learn";
+  if (phase === "done") {
+    root.append(renderVocabDone(items.length));
+    return root;
+  }
   const index = Math.min(progress()?.vocab_index || 0, items.length - 1);
   const item = items[index];
-  const phase = progress()?.vocab_phase === "recall" ? "recall" : "learn";
-  root.append(phase === "learn" ? renderTeachCard(item, index, items.length) : renderRecallCard(item, index, items.length));
+  root.append(phase === "recall" ? renderRecallCard(item, index, items.length) : renderTeachCard(item, index, items.length));
   return root;
+}
+
+function renderVocabDone(total) {
+  const card = document.createElement("section");
+  card.className = "card vocab-card";
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  kicker.textContent = "本课词汇";
+  const title = document.createElement("h1");
+  title.textContent = `${total} 个词评完了`;
+  const brief = document.createElement("p");
+  brief.className = "talk-brief";
+  brief.textContent = "评分只决定复习间隔，不会把你扔去下一页。下一步是听读短对话，你点了才过去。";
+  const actions = document.createElement("div");
+  actions.className = "vocab-actions";
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "primary";
+  next.textContent = "去听读";
+  next.addEventListener("click", () => advanceTo("listen"));
+  const again = document.createElement("button");
+  again.type = "button";
+  again.className = "ghost";
+  again.textContent = "再看一遍";
+  again.addEventListener("click", async () => {
+    await saveProgress({
+      step: progress()?.step || "vocab",
+      vocab_index: 0,
+      vocab_phase: "learn",
+    });
+    state.flipped = false;
+    render();
+  });
+  actions.append(next, again);
+  card.append(kicker, title, brief, actions);
+  return card;
 }
 
 function vocabDots(index, total) {
@@ -537,12 +735,14 @@ function renderRecallCard(item, index, total) {
             body: JSON.stringify({ result: id }),
           });
           state.flipped = false;
+          const later = ["listen", "talk", "recap", "done"].includes(progress()?.step);
+          const step = later ? progress().step : "vocab";
           if (index + 1 >= total) {
-            await saveProgress({ step: "listen", vocab_index: index, vocab_phase: "recall" });
-            go("reading");
+            await saveProgress({ step, vocab_index: index, vocab_phase: "done" });
+            render();
             return;
           }
-          await saveProgress({ step: "vocab", vocab_index: index + 1, vocab_phase: "recall" });
+          await saveProgress({ step, vocab_index: index + 1, vocab_phase: "recall" });
           render();
         } catch (error) {
           setError(error.message);
@@ -622,6 +822,7 @@ function renderLibrary() {
 
 function renderReading() {
   const root = document.createDocumentFragment();
+  root.append(renderStepNav());
   const card = document.createElement("section");
   card.className = "card";
   card.innerHTML = `<p class="kicker">听读</p><h1>短对话</h1>`;
@@ -684,15 +885,20 @@ function renderReading() {
     });
     quiz.append(wrap);
   });
+  const actions = document.createElement("div");
+  actions.className = "talk-actions";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "返回词汇";
+  back.addEventListener("click", () => visitStep("vocab"));
   const next = document.createElement("button");
   next.type = "button";
   next.className = "primary";
   next.textContent = "去对话";
-  next.addEventListener("click", async () => {
-    await saveProgress({ step: "talk" });
-    go("talk");
-  });
-  quiz.append(next);
+  next.addEventListener("click", () => advanceTo("talk"));
+  actions.append(back, next);
+  quiz.append(actions);
   root.append(quiz);
   return root;
 }
@@ -701,6 +907,7 @@ function renderTalk() {
   const session = state.dialogue;
   const task = state.lesson?.task || {};
   const root = document.createDocumentFragment();
+  root.append(renderStepNav());
   const intro = document.createElement("section");
   intro.className = "card";
   const kicker = document.createElement("p");
@@ -788,7 +995,9 @@ function renderTalk() {
   if (allDone) {
     const ok = document.createElement("p");
     ok.className = "talk-ok";
-    ok.textContent = "这几项都说到了。可以去复盘，也可以改完再交一次。";
+    ok.textContent = state.talkJustSubmitted
+      ? "已记下你的话。下一步点「去做复盘」。"
+      : "这几项都说到了。下一步点「去做复盘」。";
     turn.append(ok);
   }
   if (session?.hint) {
@@ -819,9 +1028,12 @@ function renderTalk() {
   });
   const submit = document.createElement("button");
   submit.type = "button";
-  submit.className = "primary";
-  submit.textContent = task.submit_label || "提交我的话";
+  submit.className = allDone ? "ghost" : "primary";
+  submit.textContent = allDone ? "再交一次" : task.submit_label || "提交我的话";
   submit.addEventListener("click", async () => {
+    const previous = submit.textContent;
+    submit.disabled = true;
+    submit.textContent = "正在检查…";
     try {
       state.talkDraft = area.value;
       state.dialogue = await api(`/api/dialogue/${state.lesson.id}/order`, {
@@ -833,21 +1045,35 @@ function renderTalk() {
         done[goal.id] = goal.done;
       });
       await saveProgress({ step: "talk", task_results: done });
+      state.talkJustSubmitted = true;
       render();
     } catch (error) {
+      submit.disabled = false;
+      submit.textContent = previous;
       setError(error.message);
     }
   });
-  actions.append(hint, submit);
   const recap = document.createElement("button");
   recap.type = "button";
-  recap.className = "ghost";
+  recap.className = allDone ? "primary" : "ghost";
   recap.textContent = allDone ? "去做复盘" : "先不练了，去复盘";
   recap.addEventListener("click", async () => {
-    await saveProgress({ step: "recap" });
-    go("today");
+    recap.disabled = true;
+    try {
+      await advanceTo("recap");
+    } catch (error) {
+      recap.disabled = false;
+      setError(error.message);
+    }
   });
-  turn.append(areaLabel, area, actions, recap);
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "返回听读";
+  back.addEventListener("click", () => visitStep("listen"));
+  if (allDone) actions.append(recap, back, submit, hint);
+  else actions.append(hint, submit, recap, back);
+  turn.append(areaLabel, area, actions);
   root.append(turn);
   return root;
 }
@@ -1098,6 +1324,13 @@ function render() {
     progress: renderProgress,
   }[state.page];
   view.append(page());
+  if (state.aimRecap && !state.loading) {
+    const recap = document.getElementById("lesson-recap");
+    if (recap) {
+      state.aimRecap = false;
+      recap.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
   if (keepSearch) {
     const search = view.querySelector(".search");
     if (search) {

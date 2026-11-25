@@ -432,7 +432,7 @@ STEP_ZH = {
     "recap": "复盘",
     "done": "已完成",
 }
-VOCAB_PHASES = ("learn", "recall")
+VOCAB_PHASES = ("learn", "recall", "done")
 
 ROADMAP = [
     {"id": "m1", "month": 1, "title_zh": "点餐、问候、请对方再说一次", "status": "in_progress"},
