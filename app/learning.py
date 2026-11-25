@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from . import seed
 from .dialogue import MODE, MODE_ZH, completed_goal_ids, hint_for, your_lines
-from .srs import RESULTS, iso, schedule
+from .srs import REMEMBERED_DAYS, RESULTS, RESULT_ZH, iso, schedule
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEARNING_DB = ROOT / "data" / "learning.db"
@@ -734,10 +734,34 @@ def progress_overview() -> dict:
             (iso(),),
         ).fetchone()[0]
         cards = connection.execute("SELECT COUNT(*) FROM review_cards").fetchone()[0]
+        box_map = {
+            int(row["box"]): row["n"]
+            for row in connection.execute(
+                "SELECT box, COUNT(*) AS n FROM review_cards GROUP BY box"
+            )
+        }
+        result_map = {
+            row["result"]: row["n"]
+            for row in connection.execute(
+                "SELECT result, COUNT(*) AS n FROM review_log GROUP BY result"
+            )
+        }
         log = review_log(8)
         completed = []
+        lessons = []
         for lesson in seed.LESSONS:
             progress = _progress_out(_progress_row(connection, lesson["id"]), lesson["id"])
+            started = progress["updated_at"] is not None
+            lessons.append(
+                {
+                    "id": lesson["id"],
+                    "title_zh": lesson["title_zh"],
+                    "month": lesson["month"],
+                    "step": progress["step"] if started else "idle",
+                    "step_zh": seed.STEP_ZH.get(progress["step"], progress["step"]) if started else "未开始",
+                    "started": started,
+                }
+            )
             if progress["step"] == "done":
                 completed.append(
                     {
@@ -749,15 +773,36 @@ def progress_overview() -> dict:
         roadmap = []
         for item in seed.ROADMAP:
             status = item["status"]
-            label = "进行中" if status == "in_progress" else "待验证"
+            label = "进行中" if status == "in_progress" else "未开始"
             if item["id"] == "m1" and _month_done(connection, 1):
                 status = "done"
                 label = "已完成"
+            elif status == "pending":
+                label = "未开始"
             roadmap.append({**item, "status": status, "label": label})
+        boxes = [
+            {
+                "box": box,
+                "label_zh": f"第 {box} 格",
+                "hint_zh": f"隔 {REMEMBERED_DAYS[box]} 天",
+                "count": box_map.get(box, 0),
+            }
+            for box in (1, 2, 3, 4)
+        ]
+        results = [
+            {"id": key, "label_zh": RESULT_ZH[key], "count": result_map.get(key, 0)}
+            for key in RESULTS
+        ]
         return {
             "completed_lessons": completed,
+            "lesson_total": len(seed.LESSONS),
+            "lessons": lessons,
             "due_count": due,
             "card_count": cards,
+            "boxes": boxes,
+            "results": results,
             "review_log": log,
             "roadmap": roadmap,
+            "month_done": sum(1 for item in roadmap if item["status"] == "done"),
+            "month_total": len(seed.ROADMAP),
         }

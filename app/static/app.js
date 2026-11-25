@@ -852,58 +852,222 @@ function renderTalk() {
   return root;
 }
 
+function localWhen(isoStamp) {
+  if (!isoStamp) return "";
+  const date = new Date(isoStamp);
+  if (Number.isNaN(date.getTime())) return isoStamp;
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function svgEl(name, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  return node;
+}
+
+function ringChart(value, total, caption) {
+  const wrap = document.createElement("div");
+  wrap.className = "ring";
+  const safeTotal = total || 1;
+  const pct = Math.max(0, Math.min(1, (value || 0) / safeTotal));
+  const radius = 42;
+  const circ = 2 * Math.PI * radius;
+  const svg = svgEl("svg", {
+    viewBox: "0 0 108 108",
+    class: "ring-svg",
+    "aria-hidden": "true",
+  });
+  svg.append(
+    svgEl("circle", {
+      cx: 54,
+      cy: 54,
+      r: radius,
+      fill: "none",
+      stroke: "#e6e9ef",
+      "stroke-width": 10,
+    })
+  );
+  if (pct > 0) {
+    svg.append(
+      svgEl("circle", {
+        cx: 54,
+        cy: 54,
+        r: radius,
+        fill: "none",
+        stroke: "#12826f",
+        "stroke-width": 10,
+        "stroke-linecap": "round",
+        "stroke-dasharray": `${circ * pct} ${circ}`,
+        transform: "rotate(-90 54 54)",
+      })
+    );
+  }
+  const valueEl = document.createElement("p");
+  valueEl.className = "ring-value";
+  valueEl.textContent = `${value || 0}/${total || 0}`;
+  const cap = document.createElement("p");
+  cap.className = "ring-cap";
+  cap.textContent = caption;
+  wrap.append(svg, valueEl, cap);
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", `${caption} ${value || 0} 共 ${total || 0}`);
+  return wrap;
+}
+
+function barChart(items, tone, maxValue) {
+  const max = maxValue || Math.max(1, ...items.map((item) => item.count || 0));
+  const list = document.createElement("div");
+  list.className = "hbar-list";
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "hbar";
+    const label = document.createElement("p");
+    label.className = "hbar-label";
+    label.textContent = item.label_zh;
+    const count = document.createElement("p");
+    count.className = "hbar-count";
+    count.textContent = item.display != null ? item.display : String(item.count || 0);
+    const track = document.createElement("div");
+    track.className = "hbar-track";
+    const fill = document.createElement("div");
+    fill.className = "hbar-fill" + (tone === "result" ? " is-" + item.id : "");
+    fill.style.width = `${((item.count || 0) / max) * 100}%`;
+    track.append(fill);
+    row.append(label, count, track);
+    if (item.hint_zh) {
+      row.title = item.hint_zh;
+    }
+    list.append(row);
+  });
+  return list;
+}
+
 function renderProgress() {
   const data = state.overview;
   if (!data) return banner("empty", "进度还没加载出来。");
   const root = document.createDocumentFragment();
+  const doneCount = (data.completed_lessons || []).length;
+  const lessonTotal = data.lesson_total || 3;
+  const monthDone = data.month_done || 0;
+  const monthTotal = data.month_total || 6;
+  const currentMonth = (data.roadmap || []).find((item) => item.status === "in_progress") || (data.roadmap || [])[0];
+
   const summary = document.createElement("section");
   summary.className = "card";
-  summary.innerHTML = `<p class="kicker">进度</p><h1>半年路线</h1>
-    <p>完成课程 ${data.completed_lessons.length} · 复习卡 ${data.card_count} · 到期 ${data.due_count}</p>`;
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  kicker.textContent = "进度";
+  const title = document.createElement("h1");
+  title.textContent = "半年路线";
+  const rings = document.createElement("div");
+  rings.className = "chart-rings";
+  rings.append(
+    ringChart(doneCount, lessonTotal, "已完成课程"),
+    ringChart(monthDone, monthTotal, "已完成月份")
+  );
+  const stats = document.createElement("p");
+  stats.className = "chart-stats";
+  stats.textContent = `复习卡 ${data.card_count || 0} · 今天到期 ${data.due_count || 0}`;
+  summary.append(kicker, title, rings, stats);
   root.append(summary);
-  const done = document.createElement("section");
-  done.className = "card";
-  done.innerHTML = "<h2>已完成课程</h2>";
-  if (!data.completed_lessons.length) done.append(banner("empty", "还没有完成的课。先把当前这一课走完。"));
-  else {
-    const list = document.createElement("ul");
-    list.className = "list";
-    data.completed_lessons.forEach((item) => {
-      const row = document.createElement("li");
-      row.textContent = `${item.title_zh} · ${item.at}`;
-      list.append(row);
-    });
-    done.append(list);
+
+  const map = document.createElement("section");
+  map.className = "card";
+  const mapTitle = document.createElement("h2");
+  mapTitle.textContent = "六个月";
+  const track = document.createElement("div");
+  track.className = "month-track";
+  track.setAttribute("role", "list");
+  (data.roadmap || []).forEach((item) => {
+    const cell = document.createElement("div");
+    cell.className = "month-cell is-" + item.status;
+    cell.setAttribute("role", "listitem");
+    const num = document.createElement("span");
+    num.className = "month-n";
+    num.textContent = String(item.month);
+    cell.append(num);
+    cell.title = `第 ${item.month} 月 ${item.title_zh} · ${item.label}`;
+    track.append(cell);
+  });
+  const mapNote = document.createElement("p");
+  mapNote.className = "audio-tag";
+  mapNote.textContent = currentMonth
+    ? `当前第 ${currentMonth.month} 月 · ${currentMonth.title_zh} · ${currentMonth.label}`
+    : "路线还没有排出来。";
+  map.append(mapTitle, track, mapNote);
+  root.append(map);
+
+  const month = document.createElement("section");
+  month.className = "card";
+  const monthTitle = document.createElement("h2");
+  monthTitle.textContent = "本月三课";
+  month.append(monthTitle);
+  const lessonItems = (data.lessons || []).map((item) => {
+    const pct = { idle: 0, vocab: 0.2, listen: 0.4, talk: 0.6, recap: 0.8, done: 1 }[item.step] ?? 0;
+    return {
+      label_zh: item.title_zh,
+      count: Math.round(pct * 100),
+      display: item.step_zh,
+      hint_zh: item.step_zh,
+    };
+  });
+  if (!lessonItems.length) month.append(banner("empty", "还没有排课。"));
+  else month.append(barChart(lessonItems, "", 100));
+  root.append(month);
+
+  const boxes = document.createElement("section");
+  boxes.className = "card";
+  const boxesTitle = document.createElement("h2");
+  boxesTitle.textContent = "复习卡在哪一格";
+  const boxesHelp = document.createElement("p");
+  boxesHelp.className = "audio-tag";
+  boxesHelp.textContent = "格子越大，下次隔得越久。这是复习间隔，不是口语分数。";
+  boxes.append(boxesTitle, boxesHelp, barChart(data.boxes || []));
+  if (!(data.card_count > 0)) {
+    const note = document.createElement("p");
+    note.className = "audio-tag";
+    note.textContent = "词汇评分后，卡片会进格子。";
+    boxes.append(note);
   }
-  root.append(done);
+  root.append(boxes);
+
+  const results = document.createElement("section");
+  results.className = "card";
+  const resultsTitle = document.createElement("h2");
+  resultsTitle.textContent = "最近怎么评";
+  results.append(resultsTitle, barChart(data.results || [], "result"));
+  const resultTotal = (data.results || []).reduce((sum, item) => sum + (item.count || 0), 0);
+  if (!resultTotal) {
+    const note = document.createElement("p");
+    note.className = "audio-tag";
+    note.textContent = "还没有评分。翻卡选忘了、模糊或记得之后会出现。";
+    results.append(note);
+  }
+  root.append(results);
+
   const log = document.createElement("section");
   log.className = "card";
-  log.innerHTML = "<h2>复习记录</h2>";
-  if (!data.review_log.length) log.append(banner("empty", "还没有复习记录。"));
+  const logTitle = document.createElement("h2");
+  logTitle.textContent = "最近复习";
+  log.append(logTitle);
+  if (!(data.review_log || []).length) log.append(banner("empty", "还没有复习记录。"));
   else {
     const list = document.createElement("ul");
     list.className = "list";
+    const names = { forgot: "忘了", fuzzy: "模糊", remembered: "记得" };
     data.review_log.forEach((item) => {
       const row = document.createElement("li");
-      const names = { forgot: "忘了", fuzzy: "模糊", remembered: "记得" };
-      row.textContent = `${item.english} · ${names[item.result] || item.result} · 下次 ${item.due_at}`;
+      row.textContent = `${item.english} · ${names[item.result] || item.result} · 下次 ${localWhen(item.due_at)}`;
       list.append(row);
     });
     log.append(list);
   }
   root.append(log);
-  const map = document.createElement("section");
-  map.className = "card";
-  map.innerHTML = "<h2>半年路线图</h2>";
-  const list = document.createElement("ul");
-  list.className = "list roadmap";
-  data.roadmap.forEach((item) => {
-    const row = document.createElement("li");
-    row.innerHTML = `第 ${item.month} 月 ${item.title_zh} <span>${item.label}</span>`;
-    list.append(row);
-  });
-  map.append(list);
-  root.append(map);
   return root;
 }
 

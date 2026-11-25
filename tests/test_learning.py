@@ -148,6 +148,24 @@ class LearningDbTest(unittest.TestCase):
         month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")
         self.assertEqual(month1["status"], "done")
         self.assertEqual(month1["label"], "已完成")
+        self.assertEqual(overview["month_done"], 1)
+        self.assertEqual(overview["lesson_total"], 3)
+        self.assertEqual(len(overview["lessons"]), 3)
+        self.assertTrue(all(item["step"] == "done" for item in overview["lessons"]))
+
+    def test_overview_charts_follow_reviews(self):
+        empty = self.learning.progress_overview()
+        self.assertEqual([item["count"] for item in empty["boxes"]], [0, 0, 0, 0])
+        self.assertEqual([item["count"] for item in empty["results"]], [0, 0, 0])
+        self.learning.grade_review(f"{self.seed.LESSON_ID}.coffee", "remembered")
+        self.learning.grade_review(f"{self.seed.LESSON_ID}.please", "forgot")
+        overview = self.learning.progress_overview()
+        boxes = {item["box"]: item["count"] for item in overview["boxes"]}
+        results = {item["id"]: item["count"] for item in overview["results"]}
+        self.assertEqual(boxes[1], 1)
+        self.assertEqual(boxes[2], 1)
+        self.assertEqual(results["remembered"], 1)
+        self.assertEqual(results["forgot"], 1)
 
 
 class DialogueTest(unittest.TestCase):
