@@ -2,4 +2,6 @@
 __pycache__/
 *.pyc
 data/raw/
-data/app.db
+data/*.db
+*.db-wal
+*.db-shm

@@ -1,0 +1,17 @@
+{
+  "name": "英语",
+  "short_name": "英语",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef1f6",
+  "theme_color": "#12826f",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
