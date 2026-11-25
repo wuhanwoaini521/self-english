@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>英语</title>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+</head>
+<body>
+  <header class="top">
+    <div class="top-row">
+      <h1>英语</h1>
+      <button type="button" id="hide-zh" aria-pressed="false">盖住中文</button>
+    </div>
+    <p id="summary" class="summary">正在打开词库…</p>
+    <div class="books" role="group" aria-label="词书">
+      <button type="button" class="book is-on" data-book="travel" aria-pressed="true">旅行</button>
+      <button type="button" class="book" data-book="business" aria-pressed="false">商务</button>
+      <button type="button" class="book" data-book="reading" aria-pressed="false">阅读</button>
+    </div>
+    <div class="tools">
+      <input id="q" type="search" placeholder="搜英文或中文" autocomplete="off" enterkeyhint="search">
+    </div>
+  </header>
+  <main>
+    <p id="status" class="status" hidden></p>
+    <ol id="list" class="list"></ol>
+    <p id="more-hint" class="more-hint" hidden>向下看，再来 7 条</p>
+  </main>
+  <footer class="sources">
+    <p>一次 7 条。向下滚动再看后面的。旅行和商务可以一起开，上班和出门都能用。阅读是短句。</p>
+    <p>词级来自 CEFR-J 1.5（投野研究室）和 NGSL-Spoken 1.2（Browne, Culligan, Phillips, CC BY-SA 4.0）。中文和音标来自 ECDICT。短句来自 Tatoeba，经 manythings.org 整理，CC BY 2.0 FR。</p>
+  </footer>
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>
