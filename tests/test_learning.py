@@ -29,8 +29,28 @@ class LearningDbTest(unittest.TestCase):
         with self.learning.connect() as connection:
             lessons = connection.execute("SELECT COUNT(*) FROM lessons").fetchone()[0]
             expressions = connection.execute("SELECT COUNT(*) FROM expressions").fetchone()[0]
-        self.assertEqual(lessons, 1)
-        self.assertEqual(expressions, 5)
+            coffee = connection.execute(
+                "SELECT phonetic, note_zh, example_en FROM expressions WHERE id = ?",
+                (f"{self.seed.LESSON_ID}.coffee",),
+            ).fetchone()
+        self.assertEqual(lessons, 3)
+        self.assertEqual(expressions, 15)
+        self.assertEqual(coffee["phonetic"], "/ˈkɔːfi/")
+        self.assertIn("咖啡", coffee["note_zh"])
+        self.assertTrue(coffee["example_en"])
+
+    def test_vocab_starts_in_learn_phase(self):
+        today = self.learning.today()
+        self.assertEqual(today["progress"]["vocab_phase"], "learn")
+        payload = self.learning.lesson_payload(self.seed.LESSON_ID)
+        coffee = payload["expressions"][0]
+        self.assertEqual(coffee["english"], "coffee")
+        self.assertEqual(coffee["mark"], "☕")
+        self.assertTrue(coffee["note_zh"])
+        task = payload["task"]
+        self.assertTrue(task["brief_zh"])
+        self.assertTrue(task["hear_label_zh"])
+        self.assertEqual(task["submit_label"], "提交我的话")
 
     def test_duplicate_review_card(self):
         first = self.learning.add_review(f"{self.seed.LESSON_ID}.coffee")
@@ -48,6 +68,22 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(card["box"], 2)
         self.assertEqual(card["interval_days"], 3)
         self.assertTrue(card["due_at"] > card["updated_at"] or card["due_at"] >= card["updated_at"])
+
+    def test_grade_creates_missing_card(self):
+        card = self.learning.grade_review(f"{self.seed.LESSON_ID}.coffee", "forgot")
+        self.assertEqual(card["box"], 1)
+        self.assertEqual(card["interval_days"], 1)
+        self.assertEqual(card["last_result"], "forgot")
+        with self.learning.connect() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM review_cards").fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_grade_unknown_expression(self):
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as raised:
+            self.learning.grade_review("missing-expression", "remembered")
+        self.assertEqual(raised.exception.status_code, 404)
 
     def test_progress_conflict(self):
         saved = self.learning.save_progress(self.seed.LESSON_ID, {"step": "vocab", "vocab_index": 1})
@@ -83,6 +119,36 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(lesson, "咖啡店点餐")
 
+    def test_today_starts_with_cafe(self):
+        today = self.learning.today()
+        self.assertEqual(today["lesson_id"], "cafe-order-a1")
+        self.assertEqual(today["lesson_no"], 1)
+        self.assertEqual(today["lesson_total"], 3)
+        self.assertEqual(today["action"], "开始第一课")
+
+    def test_today_advances_after_cafe_done(self):
+        self.learning.save_progress(self.seed.LESSON_ID, {"step": "done"})
+        today = self.learning.today()
+        self.assertEqual(today["lesson_id"], "greetings-a1")
+        self.assertEqual(today["title_zh"], "问候")
+        self.assertEqual(today["action"], "开始第 2 课")
+        overview = self.learning.progress_overview()
+        self.assertEqual([item["id"] for item in overview["completed_lessons"]], ["cafe-order-a1"])
+        month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")
+        self.assertEqual(month1["status"], "in_progress")
+
+    def test_month1_done_after_three_lessons(self):
+        for lesson in self.seed.LESSONS:
+            self.learning.save_progress(lesson["id"], {"step": "done"})
+        today = self.learning.today()
+        self.assertEqual(today["lesson_id"], "say-again-a1")
+        self.assertEqual(today["action"], "再看这一课")
+        overview = self.learning.progress_overview()
+        self.assertEqual(len(overview["completed_lessons"]), 3)
+        month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")
+        self.assertEqual(month1["status"], "done")
+        self.assertEqual(month1["label"], "已完成")
+
 
 class DialogueTest(unittest.TestCase):
     def test_order_completes_goals(self):
@@ -98,6 +164,36 @@ class DialogueTest(unittest.TestCase):
 
         done = completed_goal_ids("Water, please. Thank you.", GOALS)
         self.assertNotIn("cafe-order-a1.goal-drink", done)
+
+    def test_greetings_goals(self):
+        from app.dialogue import completed_goal_ids
+        from app.seed import GREETINGS
+
+        done = completed_goal_ids(
+            "Hello. How are you? I'm fine. Nice to meet you.",
+            GREETINGS["goals"],
+        )
+        self.assertEqual(len(done), 3)
+
+    def test_hint_is_your_line(self):
+        from app.dialogue import hint_for
+        from app.seed import CAFE_ORDER
+
+        first = hint_for(CAFE_ORDER["dialogue"], 0)
+        self.assertEqual(first["english"], "I would like a cup of coffee, please.")
+        second = hint_for(CAFE_ORDER["dialogue"], 1)
+        self.assertEqual(second["english"], "Thank you.")
+        self.assertIsNone(hint_for(CAFE_ORDER["dialogue"], 2))
+
+    def test_say_again_goals(self):
+        from app.dialogue import completed_goal_ids
+        from app.seed import SAY_AGAIN
+
+        done = completed_goal_ids(
+            "Sorry. I don't understand. Please say that again.",
+            SAY_AGAIN["goals"],
+        )
+        self.assertEqual(len(done), 3)
 
 
 class SrsTest(unittest.TestCase):

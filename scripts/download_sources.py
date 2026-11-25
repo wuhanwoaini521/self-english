@@ -56,7 +56,7 @@ def download(url: str, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".part")
     request = urllib.request.Request(url, headers={"User-Agent": "self-english/0.1"})
     print(f"get {url}")
-    with urllib.request.urlopen(request, timeout=180) as response, tmp.open("wb") as out:
+    with urllib.request.urlopen(request, timeout=600) as response, tmp.open("wb") as out:
         total = int(response.headers.get("Content-Length") or 0)
         done = 0
         next_report = 0

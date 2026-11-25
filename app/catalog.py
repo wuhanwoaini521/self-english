@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "app.db"
 BOOKS = ("travel", "business", "reading")
 PAGE = 7
-BUILD_HINT = "还没有词库。在项目目录运行 python scripts/build_catalog.py"
+BUILD_HINT = "还没有词库。在项目目录运行 uv run python scripts/build_catalog.py"
 
 
 def ready() -> bool:

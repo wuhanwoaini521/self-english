@@ -73,7 +73,7 @@ button { cursor: pointer; }
 .frame {
   flex: 1;
   min-width: 0;
-  padding: 1rem 1rem 6.5rem;
+  padding: 1rem 1rem 8rem;
 }
 
 .topbar {
@@ -100,6 +100,102 @@ button { cursor: pointer; }
 }
 
 .view { max-width: 40rem; }
+
+.view.is-vocab {
+  max-width: 42rem;
+  min-height: calc(100svh - 8.6rem - env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+}
+
+.vocab-tabs { flex: 0 0 auto; }
+
+.card.vocab-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 22rem;
+  margin: 0.7rem 0 0;
+  padding: 1.1rem 1.1rem 1.15rem;
+}
+
+.vocab-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.4rem;
+}
+
+.vocab-head .kicker { margin: 0; }
+
+.vocab-dots { display: flex; gap: 0.35rem; }
+
+.vocab-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.vocab-dot.is-done { background: #b7d9d0; }
+.vocab-dot.is-on { background: var(--jade); width: 1.15rem; }
+
+.vocab-face {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  text-align: center;
+  min-height: 12rem;
+  padding: 0.6rem 0.2rem 0.9rem;
+}
+
+button.vocab-flip {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 1.2rem;
+  cursor: pointer;
+}
+
+button.vocab-flip:hover { background: #f6fbf9; }
+
+.vocab-word {
+  font-size: clamp(2rem, 8vw, 3.15rem);
+  text-align: center;
+}
+
+.vocab-hint {
+  margin: 1.1rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.vocab-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: auto;
+}
+
+.vocab-actions .row { justify-content: center; }
+
+.vocab-actions .primary { width: 100%; }
+
+.vocab-grades {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.vocab-grades .grade {
+  width: 100%;
+  min-height: 3.35rem;
+  border-radius: 1.1rem;
+  font-weight: 650;
+}
 
 .card, .panel {
   background: var(--card);
@@ -129,6 +225,50 @@ h1, h2 {
 }
 
 .zh { margin: 0.35rem 0 0; color: var(--zh); }
+
+.teach-card .vocab-face { justify-content: flex-start; }
+
+.teach-card .english { text-align: center; }
+.teach-ipa {
+  margin: 0.2rem 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.05rem;
+}
+.teach-meaning {
+  margin: 0.35rem 0 0.7rem;
+  text-align: center;
+  color: var(--zh);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.teach-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 6.4rem;
+  margin: 0.2rem 0 0.85rem;
+  background: #eef7f4;
+  border-radius: 1.2rem;
+  font-size: 3.2rem;
+  line-height: 1;
+}
+.teach-block {
+  margin: 0.75rem 0 0;
+  padding: 0.85rem 0.9rem;
+  background: var(--fill);
+  border-radius: 1.1rem;
+}
+.teach-note, .teach-example {
+  margin: 0.2rem 0 0;
+  line-height: 1.55;
+}
+.teach-example {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 1.15rem;
+}
+.teach-card .teach-block { text-align: left; }
 
 body.hide-zh .can-hide { display: none; }
 
@@ -199,6 +339,36 @@ textarea, .search {
 
 textarea { min-height: 7rem; resize: vertical; }
 
+.talk-brief {
+  margin: 0.35rem 0 0.6rem;
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.talk-goals {
+  list-style: none;
+  margin: 0.6rem 0 0.9rem;
+  padding: 0;
+}
+
+.talk-goals .goal { margin: 0.35rem 0 0; }
+
+.talk-ok {
+  margin: 0 0 0.8rem;
+  padding: 0.75rem 0.9rem;
+  background: #e5f4ef;
+  border-radius: 1.1rem;
+}
+
+.talk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+#talk-input { margin-top: 0.35rem; }
+
 .banner, .empty, .error, .loading {
   padding: 1rem 1.05rem;
   border-radius: 1.3rem;
@@ -238,6 +408,7 @@ textarea { min-height: 7rem; resize: vertical; }
   .sidebar { display: block; }
   .tabbar, .mobile-only { display: none; }
   .frame { padding: 1.4rem 1.6rem 2rem; }
+  .view.is-vocab { min-height: calc(100svh - 3.4rem); }
 }
 
 button:focus-visible, input:focus-visible, textarea:focus-visible {

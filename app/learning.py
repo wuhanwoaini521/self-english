@@ -10,13 +10,14 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from . import seed
-from .dialogue import MODE, MODE_ZH, completed_goal_ids, hint_for
-from .srs import RESULTS, iso, schedule, utcnow
+from .dialogue import MODE, MODE_ZH, completed_goal_ids, hint_for, your_lines
+from .srs import RESULTS, iso, schedule
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEARNING_DB = ROOT / "data" / "learning.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 STEPS = seed.STEPS
+VOCAB_PHASES = seed.VOCAB_PHASES
 
 
 def learning_path() -> Path:
@@ -60,6 +61,11 @@ def _init_schema(connection: sqlite3.Connection) -> None:
             english TEXT NOT NULL,
             chinese TEXT NOT NULL,
             kind TEXT NOT NULL,
+            phonetic TEXT NOT NULL DEFAULT '',
+            note_zh TEXT NOT NULL DEFAULT '',
+            example_en TEXT NOT NULL DEFAULT '',
+            example_zh TEXT NOT NULL DEFAULT '',
+            mark TEXT NOT NULL DEFAULT '',
             audio_url TEXT,
             sort_order INTEGER NOT NULL,
             FOREIGN KEY (lesson_id) REFERENCES lessons(id)
@@ -97,6 +103,7 @@ def _init_schema(connection: sqlite3.Connection) -> None:
             lesson_id TEXT PRIMARY KEY,
             step TEXT NOT NULL,
             vocab_index INTEGER NOT NULL DEFAULT 0,
+            vocab_phase TEXT NOT NULL DEFAULT 'learn',
             listen_index INTEGER NOT NULL DEFAULT 0,
             hide_zh INTEGER NOT NULL DEFAULT 0,
             question_results_json TEXT NOT NULL DEFAULT '{}',
@@ -131,71 +138,108 @@ def _init_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    _add_column(connection, "expressions", "phonetic", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "expressions", "note_zh", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "expressions", "example_en", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "expressions", "example_zh", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "expressions", "mark", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "lesson_progress", "vocab_phase", "TEXT NOT NULL DEFAULT 'learn'")
     row = connection.execute("SELECT version FROM schema_version").fetchone()
+    current = int(row["version"]) if row is not None else 0
+    if current < 3:
+        connection.execute(
+            """
+            UPDATE lesson_progress
+            SET vocab_index = 0, vocab_phase = 'learn'
+            WHERE step != 'done'
+            """
+        )
     if row is None:
         connection.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+    else:
+        connection.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
     connection.commit()
 
 
+def _add_column(connection: sqlite3.Connection, table: str, name: str, spec: str) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if name not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {spec}")
+
+
 def seed_lesson(connection: sqlite3.Connection) -> None:
-    lesson = seed.LESSON
-    connection.execute(
-        """
-        INSERT OR IGNORE INTO lessons (id, title, title_zh, level, source, source_note)
-        VALUES (:id, :title, :title_zh, :level, :source, :source_note)
-        """,
-        lesson,
-    )
-    for item in seed.EXPRESSIONS:
+    for lesson in seed.LESSONS:
         connection.execute(
             """
-            INSERT OR IGNORE INTO expressions
-            (id, lesson_id, english, chinese, kind, audio_url, sort_order)
-            VALUES (:id, :lesson_id, :english, :chinese, :kind, NULL, :sort_order)
+            INSERT OR IGNORE INTO lessons (id, title, title_zh, level, source, source_note)
+            VALUES (:id, :title, :title_zh, :level, :source, :source_note)
             """,
-            {**item, "lesson_id": lesson["id"]},
+            lesson,
         )
-    for item in seed.DIALOGUE:
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO dialogue_lines
-            (id, lesson_id, speaker, speaker_zh, english, chinese, audio_url, sort_order)
-            VALUES (:id, :lesson_id, :speaker, :speaker_zh, :english, :chinese, NULL, :sort_order)
-            """,
-            {**item, "lesson_id": lesson["id"]},
-        )
-    for item in seed.QUESTIONS:
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO questions
-            (id, lesson_id, prompt_en, prompt_zh, options_json, answer_id, sort_order)
-            VALUES (:id, :lesson_id, :prompt_en, :prompt_zh, :options_json, :answer_id, :sort_order)
-            """,
-            {
-                "id": item["id"],
-                "lesson_id": lesson["id"],
-                "prompt_en": item["prompt_en"],
-                "prompt_zh": item["prompt_zh"],
-                "options_json": json.dumps(item["options"], ensure_ascii=False),
-                "answer_id": item["answer_id"],
-                "sort_order": item["sort_order"],
-            },
-        )
-    for item in seed.GOALS:
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO task_goals
-            (id, lesson_id, label_zh, keys_json, sort_order)
-            VALUES (:id, :lesson_id, :label_zh, :keys_json, :sort_order)
-            """,
-            {
-                "id": item["id"],
-                "lesson_id": lesson["id"],
-                "label_zh": item["label_zh"],
-                "keys_json": json.dumps(item["keys"], ensure_ascii=False),
-                "sort_order": item["sort_order"],
-            },
-        )
+        for item in lesson["expressions"]:
+            connection.execute(
+                """
+                INSERT INTO expressions (
+                    id, lesson_id, english, chinese, kind, phonetic, note_zh,
+                    example_en, example_zh, mark, audio_url, sort_order
+                ) VALUES (
+                    :id, :lesson_id, :english, :chinese, :kind, :phonetic, :note_zh,
+                    :example_en, :example_zh, :mark, NULL, :sort_order
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    english = excluded.english,
+                    chinese = excluded.chinese,
+                    kind = excluded.kind,
+                    phonetic = excluded.phonetic,
+                    note_zh = excluded.note_zh,
+                    example_en = excluded.example_en,
+                    example_zh = excluded.example_zh,
+                    mark = excluded.mark,
+                    sort_order = excluded.sort_order
+                """,
+                {**item, "lesson_id": lesson["id"]},
+            )
+        for item in lesson["dialogue"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO dialogue_lines
+                (id, lesson_id, speaker, speaker_zh, english, chinese, audio_url, sort_order)
+                VALUES (:id, :lesson_id, :speaker, :speaker_zh, :english, :chinese, NULL, :sort_order)
+                """,
+                {**item, "lesson_id": lesson["id"]},
+            )
+        for item in lesson["questions"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO questions
+                (id, lesson_id, prompt_en, prompt_zh, options_json, answer_id, sort_order)
+                VALUES (:id, :lesson_id, :prompt_en, :prompt_zh, :options_json, :answer_id, :sort_order)
+                """,
+                {
+                    "id": item["id"],
+                    "lesson_id": lesson["id"],
+                    "prompt_en": item["prompt_en"],
+                    "prompt_zh": item["prompt_zh"],
+                    "options_json": json.dumps(item["options"], ensure_ascii=False),
+                    "answer_id": item["answer_id"],
+                    "sort_order": item["sort_order"],
+                },
+            )
+        for item in lesson["goals"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO task_goals
+                (id, lesson_id, label_zh, keys_json, sort_order)
+                VALUES (:id, :lesson_id, :label_zh, :keys_json, :sort_order)
+                """,
+                {
+                    "id": item["id"],
+                    "lesson_id": lesson["id"],
+                    "label_zh": item["label_zh"],
+                    "keys_json": json.dumps(item["keys"], ensure_ascii=False),
+                    "sort_order": item["sort_order"],
+                },
+            )
     connection.commit()
 
 
@@ -224,6 +268,7 @@ def _default_progress(lesson_id: str) -> dict:
         "step": "vocab",
         "vocab_index": 0,
         "listen_index": 0,
+        "vocab_phase": "learn",
         "hide_zh": False,
         "question_results": {},
         "task_results": {},
@@ -238,6 +283,7 @@ def _progress_out(row: sqlite3.Row | None, lesson_id: str) -> dict:
         "lesson_id": row["lesson_id"],
         "step": row["step"],
         "vocab_index": row["vocab_index"],
+        "vocab_phase": row["vocab_phase"] if "vocab_phase" in row.keys() else "learn",
         "listen_index": row["listen_index"],
         "hide_zh": bool(row["hide_zh"]),
         "question_results": json.loads(row["question_results_json"]),
@@ -289,6 +335,11 @@ def lesson_payload(lesson_id: str) -> dict:
                 "english": row["english"],
                 "chinese": row["chinese"],
                 "kind": row["kind"],
+                "phonetic": row["phonetic"] if "phonetic" in row.keys() else "",
+                "note_zh": row["note_zh"] if "note_zh" in row.keys() else "",
+                "example_en": row["example_en"] if "example_en" in row.keys() else "",
+                "example_zh": row["example_zh"] if "example_zh" in row.keys() else "",
+                "mark": row["mark"] if "mark" in row.keys() else "",
                 "audio": "system" if not row["audio_url"] else "file",
                 "audio_label": "系统朗读" if not row["audio_url"] else "课文音频",
             }
@@ -326,30 +377,52 @@ def lesson_payload(lesson_id: str) -> dict:
                 {"id": item["id"], "label_zh": item["label_zh"]}
                 for item in _goals(connection, lesson_id)
             ],
+            "task": lesson_meta(lesson_id)["task"],
             "progress": _progress_out(_progress_row(connection, lesson_id), lesson_id),
         }
 
 
+def lesson_meta(lesson_id: str) -> dict:
+    lesson = seed.lesson_by_id(lesson_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="没有这一课。")
+    return lesson
+
+
+def _current_lesson(connection: sqlite3.Connection) -> tuple[dict, dict, bool]:
+    last = seed.LESSONS[-1]
+    last_progress = _progress_out(_progress_row(connection, last["id"]), last["id"])
+    for lesson in seed.LESSONS:
+        progress = _progress_out(_progress_row(connection, lesson["id"]), lesson["id"])
+        if progress["step"] != "done":
+            return lesson, progress, False
+    return last, last_progress, True
+
+
 def today() -> dict:
-    lesson_id = seed.LESSON_ID
     with connect() as connection:
-        _lesson_row(connection, lesson_id)
-        progress = _progress_out(_progress_row(connection, lesson_id), lesson_id)
+        lesson, progress, all_done = _current_lesson(connection)
         due = connection.execute(
             "SELECT COUNT(*) FROM review_cards WHERE due_at <= ?",
             (iso(),),
         ).fetchone()[0]
         step = progress["step"]
-        if step == "done":
-            action = "再看一课"
+        index = seed.lesson_index(lesson["id"])
+        if all_done:
+            action = "再看这一课"
             page = "today"
+        elif progress["updated_at"] is None:
+            action = "开始第一课" if index == 1 else f"开始第 {index} 课"
+            page = "vocab"
         else:
-            action = "开始第一课" if progress["updated_at"] is None else f"继续：{seed.STEP_ZH[step]}"
+            action = f"继续：{seed.STEP_ZH[step]}"
             page = {"vocab": "vocab", "listen": "reading", "talk": "talk", "recap": "today"}.get(step, "today")
         return {
-            "lesson_id": lesson_id,
-            "title_zh": seed.LESSON["title_zh"],
-            "level": seed.LESSON["level"],
+            "lesson_id": lesson["id"],
+            "title_zh": lesson["title_zh"],
+            "level": lesson["level"],
+            "lesson_no": index,
+            "lesson_total": len(seed.LESSONS),
             "progress": progress,
             "due_count": due,
             "action": action,
@@ -366,6 +439,9 @@ def save_progress(lesson_id: str, payload: dict) -> dict:
     listen_index = int(payload.get("listen_index") or 0)
     if vocab_index < 0 or listen_index < 0:
         raise HTTPException(status_code=400, detail="进度不能是负数。")
+    vocab_phase = payload.get("vocab_phase")
+    if vocab_phase is not None and vocab_phase not in VOCAB_PHASES:
+        raise HTTPException(status_code=400, detail="词汇阶段不对。")
     question_results = payload.get("question_results") or {}
     task_results = payload.get("task_results") or {}
     if not isinstance(question_results, dict) or not isinstance(task_results, dict):
@@ -375,6 +451,11 @@ def save_progress(lesson_id: str, payload: dict) -> dict:
     with connect() as connection:
         _lesson_row(connection, lesson_id)
         current = _progress_row(connection, lesson_id)
+        if vocab_phase is None:
+            if current is not None and "vocab_phase" in current.keys():
+                vocab_phase = current["vocab_phase"] or "learn"
+            else:
+                vocab_phase = "learn"
         if current is not None and current["updated_at"] != expected:
             raise HTTPException(
                 status_code=409,
@@ -386,12 +467,13 @@ def save_progress(lesson_id: str, payload: dict) -> dict:
         connection.execute(
             """
             INSERT INTO lesson_progress (
-                lesson_id, step, vocab_index, listen_index, hide_zh,
+                lesson_id, step, vocab_index, vocab_phase, listen_index, hide_zh,
                 question_results_json, task_results_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(lesson_id) DO UPDATE SET
                 step = excluded.step,
                 vocab_index = excluded.vocab_index,
+                vocab_phase = excluded.vocab_phase,
                 listen_index = excluded.listen_index,
                 hide_zh = excluded.hide_zh,
                 question_results_json = excluded.question_results_json,
@@ -402,6 +484,7 @@ def save_progress(lesson_id: str, payload: dict) -> dict:
                 lesson_id,
                 step,
                 vocab_index,
+                vocab_phase,
                 listen_index,
                 hide_zh,
                 json.dumps(question_results, ensure_ascii=False),
@@ -447,12 +530,30 @@ def grade_review(expression_id: str, result: str) -> dict:
     if result not in RESULTS:
         raise HTTPException(status_code=400, detail="只能选忘了、模糊或记得。")
     with connect() as connection:
+        expression = connection.execute(
+            "SELECT * FROM expressions WHERE id = ?",
+            (expression_id,),
+        ).fetchone()
+        if expression is None:
+            raise HTTPException(status_code=404, detail="没有这个表达。")
         card = connection.execute(
             "SELECT * FROM review_cards WHERE expression_id = ?",
             (expression_id,),
         ).fetchone()
         if card is None:
-            raise HTTPException(status_code=404, detail="还没有这张复习卡。")
+            now = iso()
+            connection.execute(
+                """
+                INSERT INTO review_cards (
+                    expression_id, english, chinese, box, interval_days, due_at, last_result, updated_at
+                ) VALUES (?, ?, ?, 1, 0, ?, NULL, ?)
+                """,
+                (expression_id, expression["english"], expression["chinese"], now, now),
+            )
+            card = connection.execute(
+                "SELECT * FROM review_cards WHERE expression_id = ?",
+                (expression_id,),
+            ).fetchone()
         box, days, due_at = schedule(card["box"], result)
         now = iso()
         connection.execute(
@@ -547,7 +648,8 @@ def show_dialogue_hint(lesson_id: str) -> dict:
             "SELECT * FROM dialogue_sessions WHERE lesson_id = ?",
             (lesson_id,),
         ).fetchone()
-        shown = 1 if session is None else min(len(lines), session["hints_shown"] + 1)
+        ceiling = max(len(your_lines(lines)), 1)
+        shown = 1 if session is None else min(ceiling, session["hints_shown"] + 1)
         _upsert_dialogue(connection, lesson_id, session, hints_shown=shown)
         connection.commit()
     return dialogue_state(lesson_id)
@@ -556,7 +658,7 @@ def show_dialogue_hint(lesson_id: str) -> dict:
 def submit_order(lesson_id: str, text: str) -> dict:
     text = (text or "").strip()
     if not text:
-        raise HTTPException(status_code=400, detail="先写你要点的东西。")
+        raise HTTPException(status_code=400, detail=lesson_meta(lesson_id)["task"]["empty_error"])
     if len(text) > 500:
         raise HTTPException(status_code=400, detail="这句话太长了。")
     with connect() as connection:
@@ -614,10 +716,19 @@ def _upsert_dialogue(
     )
 
 
+def _month_done(connection: sqlite3.Connection, month: int) -> bool:
+    lessons = [item for item in seed.LESSONS if item["month"] == month]
+    if not lessons:
+        return False
+    for lesson in lessons:
+        progress = _progress_out(_progress_row(connection, lesson["id"]), lesson["id"])
+        if progress["step"] != "done":
+            return False
+    return True
+
+
 def progress_overview() -> dict:
-    lesson_id = seed.LESSON_ID
     with connect() as connection:
-        progress = _progress_out(_progress_row(connection, lesson_id), lesson_id)
         due = connection.execute(
             "SELECT COUNT(*) FROM review_cards WHERE due_at <= ?",
             (iso(),),
@@ -625,19 +736,21 @@ def progress_overview() -> dict:
         cards = connection.execute("SELECT COUNT(*) FROM review_cards").fetchone()[0]
         log = review_log(8)
         completed = []
-        if progress["step"] == "done":
-            completed.append(
-                {
-                    "id": lesson_id,
-                    "title_zh": seed.LESSON["title_zh"],
-                    "at": progress["updated_at"],
-                }
-            )
+        for lesson in seed.LESSONS:
+            progress = _progress_out(_progress_row(connection, lesson["id"]), lesson["id"])
+            if progress["step"] == "done":
+                completed.append(
+                    {
+                        "id": lesson["id"],
+                        "title_zh": lesson["title_zh"],
+                        "at": progress["updated_at"],
+                    }
+                )
         roadmap = []
         for item in seed.ROADMAP:
             status = item["status"]
             label = "进行中" if status == "in_progress" else "待验证"
-            if item["id"] == "m1" and progress["step"] == "done":
+            if item["id"] == "m1" and _month_done(connection, 1):
                 status = "done"
                 label = "已完成"
             roadmap.append({**item, "status": status, "label": label})

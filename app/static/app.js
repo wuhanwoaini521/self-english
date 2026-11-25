@@ -23,6 +23,8 @@ const state = {
   catalogItems: [],
   flipped: false,
   hideZh: false,
+  talkDraft: "",
+  talkLessonId: "",
 };
 
 const view = document.querySelector("#view");
@@ -99,6 +101,7 @@ async function saveProgress(patch) {
   const body = {
     step: current?.step || "vocab",
     vocab_index: current?.vocab_index || 0,
+    vocab_phase: current?.vocab_phase || "learn",
     listen_index: current?.listen_index || 0,
     hide_zh: state.hideZh,
     question_results: current?.question_results || {},
@@ -262,7 +265,7 @@ function renderToday() {
   lesson.className = "card";
   const kicker = document.createElement("p");
   kicker.className = "kicker";
-  kicker.textContent = `${state.today.level} · 第一课`;
+  kicker.textContent = `${state.today.level} · 第 ${state.today.lesson_no} 课`;
   const title = document.createElement("h1");
   title.textContent = state.today.title_zh;
   const source = document.createElement("p");
@@ -282,7 +285,8 @@ function renderToday() {
 function renderRecap() {
   const panel = document.createElement("section");
   panel.className = "card";
-  panel.innerHTML = `<p class="kicker">复盘</p><h2>把一句加入复习</h2>`;
+  panel.innerHTML = `<p class="kicker">复盘</p><h2>本课表达</h2>
+    <p class="audio-tag">学词汇时评分会进入复习。这里还可以再加。</p>`;
   const list = document.createElement("ul");
   list.className = "list";
   (state.lesson.expressions || []).forEach((item) => {
@@ -324,7 +328,7 @@ function renderRecap() {
 function renderVocab() {
   const root = document.createDocumentFragment();
   const tabs = document.createElement("div");
-  tabs.className = "row";
+  tabs.className = "row vocab-tabs";
   [
     ["lesson", "本课词汇"],
     ["library", "词句库"],
@@ -335,6 +339,7 @@ function renderVocab() {
     button.textContent = label;
     button.addEventListener("click", () => {
       state.library = id === "library";
+      state.flipped = false;
       if (state.library) loadCatalog(true).then(render);
       else render();
     });
@@ -348,32 +353,207 @@ function renderVocab() {
   const items = state.lesson.expressions;
   const index = Math.min(progress()?.vocab_index || 0, items.length - 1);
   const item = items[index];
+  const phase = progress()?.vocab_phase === "recall" ? "recall" : "learn";
+  root.append(phase === "learn" ? renderTeachCard(item, index, items.length) : renderRecallCard(item, index, items.length));
+  return root;
+}
+
+function vocabDots(index, total) {
+  const dots = document.createElement("div");
+  dots.className = "vocab-dots";
+  dots.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < total; i += 1) {
+    const dot = document.createElement("span");
+    dot.className = "vocab-dot" + (i === index ? " is-on" : i < index ? " is-done" : "");
+    dots.append(dot);
+  }
+  return dots;
+}
+
+function vocabHead(label, index, total) {
+  const head = document.createElement("div");
+  head.className = "vocab-head";
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  kicker.textContent = `${label} ${index + 1}/${total}`;
+  head.append(kicker, vocabDots(index, total));
+  return head;
+}
+
+function renderTeachCard(item, index, total) {
   const card = document.createElement("section");
-  card.className = "card";
-  card.innerHTML = `<p class="kicker">词汇 ${index + 1}/${items.length}</p>`;
+  card.className = "card vocab-card teach-card";
+  const face = document.createElement("div");
+  face.className = "vocab-face";
+  const visual = document.createElement("div");
+  visual.className = "teach-visual";
+  visual.setAttribute("aria-hidden", "true");
+  visual.textContent = item.mark || "📝";
   const english = document.createElement("p");
-  english.className = "english";
+  english.className = "english vocab-word";
   english.textContent = item.english;
-  const zh = document.createElement("p");
-  zh.className = "zh can-hide";
-  zh.textContent = item.chinese;
-  card.append(english, zh, speakButton(item.english));
+  const meaning = document.createElement("p");
+  meaning.className = "teach-meaning";
+  meaning.textContent = item.chinese;
+  face.append(visual, english);
+  if (item.phonetic) {
+    const ipa = document.createElement("p");
+    ipa.className = "teach-ipa";
+    ipa.textContent = item.phonetic;
+    face.append(ipa);
+  }
+  face.append(meaning);
+  if (item.note_zh) {
+    const note = document.createElement("div");
+    note.className = "teach-block";
+    const title = document.createElement("p");
+    title.className = "kicker";
+    title.textContent = "怎么记";
+    const body = document.createElement("p");
+    body.className = "teach-note";
+    body.textContent = item.note_zh;
+    note.append(title, body);
+    face.append(note);
+  }
+  if (item.example_en) {
+    const example = document.createElement("div");
+    example.className = "teach-block";
+    const title = document.createElement("p");
+    title.className = "kicker";
+    title.textContent = "例句";
+    const en = document.createElement("p");
+    en.className = "teach-example";
+    en.textContent = item.example_en;
+    example.append(title, en);
+    if (item.example_zh) {
+      const zh = document.createElement("p");
+      zh.className = "zh";
+      zh.textContent = item.example_zh;
+      example.append(zh);
+    }
+    face.append(example);
+  }
+  const actions = document.createElement("div");
+  actions.className = "vocab-actions";
   const next = document.createElement("button");
   next.type = "button";
   next.className = "primary";
-  next.textContent = index + 1 >= items.length ? "去听读" : "下一个";
+  next.textContent = index + 1 >= total ? "去回忆这些词" : "下一张";
   next.addEventListener("click", async () => {
-    if (index + 1 >= items.length) {
-      await saveProgress({ step: "listen", vocab_index: index });
-      go("reading");
-    } else {
-      await saveProgress({ step: "vocab", vocab_index: index + 1 });
+    try {
+      if (index + 1 >= total) {
+        await saveProgress({ step: "vocab", vocab_index: 0, vocab_phase: "recall" });
+        state.flipped = false;
+        render();
+        return;
+      }
+      await saveProgress({ step: "vocab", vocab_index: index + 1, vocab_phase: "learn" });
       render();
+    } catch (error) {
+      setError(error.message);
     }
   });
-  card.append(next);
-  root.append(card);
-  return root;
+  actions.append(speakButton(item.english), next);
+  card.append(vocabHead("认识", index, total), face, actions);
+  return card;
+}
+
+function renderRecallCard(item, index, total) {
+  const card = document.createElement("section");
+  card.className = "card vocab-card recall-card" + (state.flipped ? " is-back" : " is-front");
+  const face = state.flipped ? document.createElement("div") : document.createElement("button");
+  face.className = "vocab-face";
+  if (!state.flipped) {
+    face.type = "button";
+    face.classList.add("vocab-flip");
+    face.setAttribute("aria-label", "翻开看中文");
+    face.addEventListener("click", () => {
+      state.flipped = true;
+      render();
+    });
+  }
+  const visual = document.createElement("div");
+  visual.className = "teach-visual";
+  visual.setAttribute("aria-hidden", "true");
+  visual.textContent = item.mark || "📝";
+  const english = document.createElement("p");
+  english.className = "english vocab-word";
+  english.textContent = item.english;
+  face.append(visual, english);
+  if (state.flipped) {
+    if (item.phonetic) {
+      const ipa = document.createElement("p");
+      ipa.className = "teach-ipa";
+      ipa.textContent = item.phonetic;
+      face.append(ipa);
+    }
+    const meaning = document.createElement("p");
+    meaning.className = "teach-meaning";
+    meaning.textContent = item.chinese;
+    face.append(meaning);
+    if (item.example_en) {
+      const example = document.createElement("div");
+      example.className = "teach-block";
+      const title = document.createElement("p");
+      title.className = "kicker";
+      title.textContent = "例句";
+      const en = document.createElement("p");
+      en.className = "teach-example";
+      en.textContent = item.example_en;
+      example.append(title, en);
+      if (item.example_zh) {
+        const zh = document.createElement("p");
+        zh.className = "zh";
+        zh.textContent = item.example_zh;
+        example.append(zh);
+      }
+      face.append(example);
+    }
+  } else {
+    const hint = document.createElement("p");
+    hint.className = "vocab-hint";
+    hint.textContent = "先想意思，再点这张卡片翻开";
+    face.append(hint);
+  }
+  const actions = document.createElement("div");
+  actions.className = "vocab-actions";
+  actions.append(speakButton(item.english));
+  if (state.flipped) {
+    const grades = document.createElement("div");
+    grades.className = "vocab-grades";
+    [
+      ["forgot", "忘了"],
+      ["fuzzy", "模糊"],
+      ["remembered", "记得"],
+    ].forEach(([id, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "grade " + id;
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        try {
+          await api(`/api/review/cards/${item.id}/result`, {
+            method: "POST",
+            body: JSON.stringify({ result: id }),
+          });
+          state.flipped = false;
+          if (index + 1 >= total) {
+            await saveProgress({ step: "listen", vocab_index: index, vocab_phase: "recall" });
+            go("reading");
+            return;
+          }
+          await saveProgress({ step: "vocab", vocab_index: index + 1, vocab_phase: "recall" });
+          render();
+        } catch (error) {
+          setError(error.message);
+        }
+      });
+      grades.append(button);
+    });
+    actions.append(grades);
+  }
+  card.append(vocabHead("回忆", index, total), face, actions);
+  return card;
 }
 
 function renderLibrary() {
@@ -519,57 +699,131 @@ function renderReading() {
 
 function renderTalk() {
   const session = state.dialogue;
+  const task = state.lesson?.task || {};
   const root = document.createDocumentFragment();
-  const card = document.createElement("section");
-  card.className = "card";
+  const intro = document.createElement("section");
+  intro.className = "card";
   const kicker = document.createElement("p");
   kicker.className = "kicker";
-  kicker.textContent = session?.mode_zh || "脚本练习";
+  kicker.textContent = "这一步：用英文回复";
   const title = document.createElement("h1");
-  title.textContent = "点一杯咖啡";
+  title.textContent = task.title_zh || "用英文说一句";
+  const brief = document.createElement("p");
+  brief.className = "talk-brief";
+  brief.textContent = task.brief_zh || "先看对方说了什么，再自己用英文写回复。不要照抄整段剧本。";
   const note = document.createElement("p");
   note.className = "audio-tag";
-  note.textContent = "这一步是脚本练习，还不是语音，也不是 AI 对话。";
-  card.append(kicker, title, note);
-  (state.lesson.dialogue || []).forEach((line) => {
-    const block = document.createElement("div");
-    block.className = "script";
-    const who = document.createElement("p");
-    who.className = "kicker";
-    who.textContent = line.speaker_zh;
+  note.textContent = "现在是打字练习，还不是语音，也不是跟 AI 聊天。完整对白在听读里已经看过。";
+  intro.append(kicker, title, brief, note);
+  root.append(intro);
+
+  const heard = document.createElement("section");
+  heard.className = "card";
+  const heardTitle = document.createElement("p");
+  heardTitle.className = "kicker";
+  heardTitle.textContent = task.hear_label_zh || "对方刚才说";
+  heard.append(heardTitle);
+  const dialogue = state.lesson.dialogue || [];
+  const firstYou = dialogue.findIndex((line) => line.speaker === "you");
+  const cueLines = dialogue
+    .slice(0, firstYou === -1 ? dialogue.length : firstYou)
+    .filter((line) => line.speaker !== "you");
+  if (!cueLines.length) {
+    heard.append(banner("empty", "这一课还没有对方的开场白。"));
+  } else {
+    cueLines.forEach((line) => {
+      const block = document.createElement("div");
+      block.className = "script";
+      const who = document.createElement("p");
+      who.className = "kicker";
+      who.textContent = line.speaker_zh;
+      const en = document.createElement("p");
+      en.className = "english";
+      en.style.fontSize = "1.25rem";
+      en.textContent = line.english;
+      const zh = document.createElement("p");
+      zh.className = "zh can-hide";
+      zh.textContent = line.chinese;
+      block.append(who, en, zh, speakButton(line.english));
+      heard.append(block);
+    });
+  }
+  root.append(heard);
+
+  const turn = document.createElement("section");
+  turn.className = "card";
+  const turnTitle = document.createElement("h2");
+  turnTitle.textContent = "写出你的英文";
+  const turnHelp = document.createElement("p");
+  turnHelp.className = "audio-tag";
+  turnHelp.textContent = "对照下面几项检查。不会写可以先看一句提示。";
+  const goals = document.createElement("ul");
+  goals.className = "talk-goals";
+  const allDone = (session?.goals || []).length > 0 && (session?.goals || []).every((goal) => goal.done);
+  (session?.goals || []).forEach((goal) => {
+    const item = document.createElement("li");
+    item.className = "goal" + (goal.done ? " done" : "");
+    item.textContent = (goal.done ? "已包含 · " : "要包含 · ") + goal.label_zh;
+    goals.append(item);
+  });
+  const areaLabel = document.createElement("label");
+  areaLabel.className = "kicker";
+  areaLabel.setAttribute("for", "talk-input");
+  areaLabel.textContent = "你要说的话";
+  const area = document.createElement("textarea");
+  area.id = "talk-input";
+  area.setAttribute("aria-label", "你要说的英文");
+  area.placeholder = task.placeholder || "在这里写你要说的英文。";
+  if (state.talkLessonId !== state.lesson.id) {
+    state.talkLessonId = state.lesson.id;
+    state.talkDraft = session?.order_text || "";
+  } else if (!state.talkDraft) {
+    state.talkDraft = session?.order_text || "";
+  }
+  area.value = state.talkDraft;
+  area.addEventListener("input", () => {
+    state.talkDraft = area.value;
+  });
+  turn.append(turnTitle, turnHelp, goals);
+  if (allDone) {
+    const ok = document.createElement("p");
+    ok.className = "talk-ok";
+    ok.textContent = "这几项都说到了。可以去复盘，也可以改完再交一次。";
+    turn.append(ok);
+  }
+  if (session?.hint) {
+    const box = document.createElement("div");
+    box.className = "teach-block";
+    const hintKicker = document.createElement("p");
+    hintKicker.className = "kicker";
+    hintKicker.textContent = "提示，可以参考";
     const en = document.createElement("p");
-    en.className = "english";
-    en.style.fontSize = "1.2rem";
-    en.textContent = line.english;
+    en.className = "teach-example";
+    en.textContent = session.hint.english;
     const zh = document.createElement("p");
     zh.className = "zh can-hide";
-    zh.textContent = line.chinese;
-    block.append(who, en, zh);
-    card.append(block);
-  });
-  const area = document.createElement("textarea");
-  area.placeholder = "用英文写出你的点单，例如 I would like a cup of coffee, please.";
-  area.value = session?.order_text || "";
+    zh.textContent = session.hint.chinese;
+    box.append(hintKicker, en, zh);
+    turn.append(box);
+  }
+  const actions = document.createElement("div");
+  actions.className = "talk-actions";
   const hint = document.createElement("button");
   hint.type = "button";
   hint.className = "ghost";
-  hint.textContent = "看提示";
+  hint.textContent = "看一句提示";
   hint.addEventListener("click", async () => {
+    state.talkDraft = area.value;
     state.dialogue = await api(`/api/dialogue/${state.lesson.id}/hint`, { method: "POST" });
     render();
   });
-  if (session?.hint) {
-    const box = document.createElement("p");
-    box.className = "zh";
-    box.textContent = `提示：${session.hint.english} / ${session.hint.chinese}`;
-    card.append(box);
-  }
   const submit = document.createElement("button");
   submit.type = "button";
   submit.className = "primary";
-  submit.textContent = "提交订单";
+  submit.textContent = task.submit_label || "提交我的话";
   submit.addEventListener("click", async () => {
     try {
+      state.talkDraft = area.value;
       state.dialogue = await api(`/api/dialogue/${state.lesson.id}/order`, {
         method: "POST",
         body: JSON.stringify({ text: area.value }),
@@ -584,24 +838,17 @@ function renderTalk() {
       setError(error.message);
     }
   });
-  const goals = document.createElement("ul");
-  goals.className = "list";
-  (session?.goals || []).forEach((goal) => {
-    const item = document.createElement("li");
-    item.className = "goal" + (goal.done ? " done" : "");
-    item.textContent = (goal.done ? "已完成 · " : "未完成 · ") + goal.label_zh;
-    goals.append(item);
-  });
+  actions.append(hint, submit);
   const recap = document.createElement("button");
   recap.type = "button";
   recap.className = "ghost";
-  recap.textContent = "去复盘";
+  recap.textContent = allDone ? "去做复盘" : "先不练了，去复盘";
   recap.addEventListener("click", async () => {
     await saveProgress({ step: "recap" });
     go("today");
   });
-  card.append(area, hint, submit, goals, recap);
-  root.append(card);
+  turn.append(areaLabel, area, actions, recap);
+  root.append(turn);
   return root;
 }
 
@@ -617,7 +864,7 @@ function renderProgress() {
   const done = document.createElement("section");
   done.className = "card";
   done.innerHTML = "<h2>已完成课程</h2>";
-  if (!data.completed_lessons.length) done.append(banner("empty", "还没有完成的课。先把咖啡店点餐走完。"));
+  if (!data.completed_lessons.length) done.append(banner("empty", "还没有完成的课。先把当前这一课走完。"));
   else {
     const list = document.createElement("ul");
     list.className = "list";
@@ -668,6 +915,7 @@ function render() {
   const keepSearch = active && active.classList.contains("search");
   const cursor = keepSearch ? active.selectionStart : null;
   paintNav();
+  view.classList.toggle("is-vocab", state.page === "vocab" && !state.library);
   view.replaceChildren();
   if (state.loading) {
     view.append(banner("loading", "正在打开…"));
@@ -711,6 +959,7 @@ zhToggle.addEventListener("click", async () => {
 window.addEventListener("hashchange", () => {
   const route = pageId();
   state.page = route.page;
+  state.flipped = false;
   if (route.library) state.library = true;
   loadCore();
 });
@@ -719,5 +968,9 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/static/sw.js").catch(() => {});
 }
 
-state.page = pageId().page;
-loadCore();
+{
+  const route = pageId();
+  state.page = route.page;
+  state.library = route.library;
+  loadCore();
+}

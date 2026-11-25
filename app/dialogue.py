@@ -1,4 +1,4 @@
-"""Scripted cafe-order practice. Voice and AI can replace this later."""
+"""Scripted lesson practice. Voice and AI can replace this later."""
 
 from __future__ import annotations
 
@@ -22,10 +22,15 @@ def completed_goal_ids(text: str, goals: list[dict]) -> list[str]:
     return done
 
 
+def your_lines(lines: list[dict]) -> list[dict]:
+    return [line for line in lines if line.get("speaker") == "you"]
+
+
 def hint_for(lines: list[dict], shown: int) -> dict | None:
-    if shown < 0 or shown >= len(lines):
+    yours = your_lines(lines)
+    if shown < 0 or shown >= len(yours):
         return None
-    line = lines[shown]
+    line = yours[shown]
     return {
         "id": line["id"],
         "speaker": line["speaker"],

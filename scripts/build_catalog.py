@@ -255,8 +255,6 @@ def load_cards(path: Path) -> list[dict]:
                 if topic and topic not in topics:
                     topics.append(topic)
             books = book_names(keys, topics, level)
-            if level != "A1" and not books:
-                continue
             display = display_of(head)
             card = grouped.get(display)
             if card is None:
@@ -340,7 +338,7 @@ def load_tatoeba(path: Path, known: set[str]) -> list[tuple[str, str, str]]:
         english, chinese = parts[0].strip(), parts[1].strip()
         attribution = parts[2].strip() if len(parts) > 2 else ""
         words = tokens(english)
-        if not english or not chinese or not 1 <= len(words) <= 8:
+        if not english or not chinese or not 1 <= len(words) <= 12:
             continue
         if has_inner_capital(english):
             continue
@@ -352,11 +350,21 @@ def load_tatoeba(path: Path, known: set[str]) -> list[tuple[str, str, str]]:
         seen.add(key)
         rows.append((english, zhconv.convert(chinese, "zh-cn"), attribution))
     rows.sort(key=lambda item: (len(tokens(item[0])), len(item[0]), item[0].lower()))
-    return rows[:240]
+    return rows[:4000]
+
+
+def spoken_rank_for(keys: list[str], *rank_maps: dict[str, int]) -> int | None:
+    for ranks in rank_maps:
+        hits = [ranks[key] for key in keys if key in ranks]
+        if hits:
+            return min(hits)
+    return None
 
 
 def main() -> None:
     spoken = load_spoken(RAW / "NGSL-Spoken_1.2.txt")
+    ngsl_path = RAW / "NGSL-1.01.csv"
+    ngsl = load_spoken(ngsl_path) if ngsl_path.exists() else {}
     cards = load_cards(RAW / "cefrj-vocabulary-profile-1.5.csv")
     wanted: set[str] = set()
     for card in cards:
@@ -377,14 +385,14 @@ def main() -> None:
             continue
         if phonetic.lower().replace("ˈ", "").replace("ː", "") == card["headword"].lower():
             phonetic = ""
-        ranks = [spoken[key] for key in card["keys"] if key in spoken]
+        rank = spoken_rank_for(card["keys"], spoken, ngsl)
         ready.append(
             {
                 "headword": card["headword"],
                 "pos": pos_label(",".join(card["pos"])),
                 "phonetic": phonetic,
                 "translation": translation,
-                "spoken_rank": min(ranks) if ranks else None,
+                "spoken_rank": rank,
                 "topics": " / ".join(card["topics"]),
                 "books": " ".join(card["books"]),
                 "cefr": card["cefr"],
