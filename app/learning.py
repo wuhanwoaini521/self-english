@@ -536,6 +536,7 @@ def today() -> dict:
                 {
                     "id": item["id"],
                     "title_zh": item["title_zh"],
+                    "month": item["month"],
                     "lesson_no": no,
                     "step": item_progress["step"],
                     "status": status,
@@ -944,14 +945,20 @@ def progress_overview() -> dict:
                     }
                 )
         roadmap = []
+        previous_done = True
         for item in seed.ROADMAP:
-            status = item["status"]
-            label = "进行中" if status == "in_progress" else "未开始"
-            if item["id"] == "m1" and _month_done(connection, 1):
+            month = item["month"]
+            has_lessons = any(lesson["month"] == month for lesson in seed.LESSONS)
+            if has_lessons and _month_done(connection, month):
                 status = "done"
                 label = "已完成"
-            elif status == "pending":
+            elif has_lessons and previous_done:
+                status = "in_progress"
+                label = "进行中"
+            else:
+                status = "pending"
                 label = "未开始"
+            previous_done = status == "done"
             roadmap.append({**item, "status": status, "label": label})
         boxes = [
             {

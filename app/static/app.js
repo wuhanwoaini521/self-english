@@ -670,7 +670,7 @@ function renderToday() {
     const month = document.createElement("section");
     month.className = "card";
     const monthTitle = document.createElement("h2");
-    monthTitle.textContent = "这个月";
+    monthTitle.textContent = "课程";
     const monthHelp = document.createElement("p");
     monthHelp.className = "audio-tag";
     monthHelp.textContent = "点已学过的课可以回去看。同一天可以连续学完。";
@@ -1578,10 +1578,12 @@ function renderProgress() {
   if (!data) return banner("empty", "进度还没加载出来。");
   const root = document.createDocumentFragment();
   const doneCount = (data.completed_lessons || []).length;
-  const lessonTotal = data.lesson_total || 3;
+  const lessonTotal = data.lesson_total || (data.lessons || []).length || 1;
   const monthDone = data.month_done || 0;
   const monthTotal = data.month_total || 6;
-  const currentMonth = (data.roadmap || []).find((item) => item.status === "in_progress") || (data.roadmap || [])[0];
+  const currentMonth = (data.roadmap || []).find((item) => item.status === "in_progress")
+    || [...(data.roadmap || [])].reverse().find((item) => item.status === "done")
+    || (data.roadmap || [])[0];
 
   const summary = document.createElement("section");
   summary.className = "card";
@@ -1631,9 +1633,11 @@ function renderProgress() {
   const month = document.createElement("section");
   month.className = "card";
   const monthTitle = document.createElement("h2");
-  monthTitle.textContent = "本月三课";
+  const monthNumber = currentMonth?.month || 1;
+  monthTitle.textContent = `第 ${monthNumber} 月课程`;
   month.append(monthTitle);
-  const lessonItems = (data.lessons || []).map((item) => {
+  const monthLessons = (data.lessons || []).filter((item) => item.month === monthNumber);
+  const lessonItems = (monthLessons.length ? monthLessons : data.lessons || []).map((item) => {
     const pct = { idle: 0, vocab: 0.2, listen: 0.4, talk: 0.6, recap: 0.8, done: 1 }[item.step] ?? 0;
     return {
       label_zh: item.title_zh,
