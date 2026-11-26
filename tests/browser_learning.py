@@ -105,14 +105,14 @@ def exercise(browser, url):
         expect(phone.locator("#view .card").first).to_be_visible()
         assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth")
     phone.goto(url + "/#/talk")
-    phone.locator("#talk-input").fill("A small coffee, please. Thank you.")
+    phone.locator("#talk-input").fill("Excuse me. Is this your phone? Thank you.")
     phone.locator(".talk-actions .primary").click()
     expect(phone.locator(".talk-ok")).to_be_visible()
     phone.get_by_role("button", name="去做复盘", exact=True).click()
     phone.get_by_role("button", name="完成本课，接着下一课").click()
-    expect(phone.locator(".today-task")).to_contain_text("问候")
+    expect(phone.locator(".today-task")).to_contain_text("不是我的")
     pc.goto(url + "/#/today")
-    expect(pc.locator(".today-task")).to_contain_text("问候")
+    expect(pc.locator(".today-task")).to_contain_text("不是我的")
     for selector in (".today-task h1", ".today-task .audio-tag", ".today-task .primary"):
         ratio = pc.locator(selector).first.evaluate("""el => {
           function luminance(color) {
@@ -130,7 +130,7 @@ def exercise(browser, url):
     pc.locator(".step-nav").get_by_role("button", name="听读").click()
     pc.locator(".choice").first.click()
     expect(pc.locator(".choice.is-on")).to_be_visible()
-    assert pc.request.get(url + "/api/today").json()["lesson_id"] == "greetings-a1"
+    assert pc.request.get(url + "/api/today").json()["lesson_id"] == "book1-02-not-mine"
     desktop.close()
     mobile.close()
 

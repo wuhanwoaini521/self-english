@@ -17,6 +17,7 @@ class LearningDbTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["SELF_ENGLISH_LEARNING_DB"] = str(Path(self.tmp.name) / "learning.db")
+        os.environ["SELF_ENGLISH_AI_PROVIDER"] = "off"
         from app import learning, seed
 
         self.learning = learning
@@ -38,11 +39,21 @@ class LearningDbTest(unittest.TestCase):
                 "SELECT phonetic, note_zh, example_en FROM expressions WHERE id = ?",
                 (f"{self.seed.LESSON_ID}.coffee",),
             ).fetchone()
-        self.assertEqual(lessons, 5)
-        self.assertEqual(expressions, 25)
+        self.assertEqual(lessons, len(self.seed.LESSONS))
+        self.assertEqual(
+            expressions,
+            sum(len(lesson["expressions"]) for lesson in self.seed.LESSONS),
+        )
         self.assertEqual(coffee["phonetic"], "/ˈkɔːfi/")
         self.assertIn("咖啡", coffee["note_zh"])
         self.assertTrue(coffee["example_en"])
+        first_book = self.learning.lesson_payload(self.seed.FIRST_LESSON_ID)
+        self.assertEqual(first_book["id"], "book1-01-excuse-me")
+        self.assertEqual(first_book["expressions"][0]["kind"], "grammar")
+        self.assertIn("句型", first_book["expressions"][0]["note_zh"])
+        self.assertGreaterEqual(len(first_book["questions"]), 4)
+        self.assertEqual(len([item for item in self.seed.LESSONS if item["month"] == 1]), 12)
+
         payload = self.learning.lesson_payload(self.seed.LESSON_ID)
         first = payload["dialogue"][0]
         self.assertEqual(first["english"], "Hello. What would you like?")
@@ -60,7 +71,7 @@ class LearningDbTest(unittest.TestCase):
 
     def test_vocab_phase_done_stays_on_vocab(self):
         saved = self.learning.save_progress(
-            self.seed.LESSON_ID,
+            self.seed.FIRST_LESSON_ID,
             {"step": "vocab", "vocab_index": 4, "vocab_phase": "done"},
         )
         self.assertEqual(saved["step"], "vocab")
@@ -71,7 +82,7 @@ class LearningDbTest(unittest.TestCase):
         from fastapi import HTTPException
 
         with self.assertRaises(HTTPException) as raised:
-            self.learning.save_progress(self.seed.LESSON_ID, {"step": "vocab", "vocab_phase": "nope"})
+            self.learning.save_progress(self.seed.FIRST_LESSON_ID, {"step": "vocab", "vocab_phase": "nope"})
         self.assertEqual(raised.exception.status_code, 400)
 
     def test_vocab_starts_in_learn_phase(self):
@@ -150,7 +161,10 @@ class LearningDbTest(unittest.TestCase):
         catalog.unlink()
         with self.learning.connect() as db:
             count = db.execute("SELECT COUNT(*) FROM review_cards").fetchone()[0]
-            lesson = db.execute("SELECT title_zh FROM lessons").fetchone()[0]
+            lesson = db.execute(
+                "SELECT title_zh FROM lessons WHERE id = ?",
+                (self.seed.LESSON_ID,),
+            ).fetchone()[0]
         self.assertEqual(count, 1)
         self.assertEqual(lesson, "咖啡店点餐")
 
@@ -230,61 +244,75 @@ class LearningDbTest(unittest.TestCase):
 
     def test_today_starts_with_cafe(self):
         today = self.learning.today()
-        self.assertEqual(today["lesson_id"], "cafe-order-a1")
+        first = self.seed.LESSONS[0]
+        self.assertEqual(today["lesson_id"], first["id"])
+        self.assertEqual(today["title_zh"], first["title_zh"])
         self.assertEqual(today["lesson_no"], 1)
-        self.assertEqual(today["lesson_total"], 5)
+        self.assertEqual(today["lesson_total"], len(self.seed.LESSONS))
         self.assertEqual(today["action"], "开始第一课")
         self.assertTrue(today["has_next"])
-        self.assertEqual(
-            [item["status"] for item in today["lessons"]],
-            ["current", "upcoming", "upcoming", "upcoming", "upcoming"],
-        )
+        self.assertEqual(today["lessons"][0]["status"], "current")
+        self.assertTrue(all(item["status"] == "upcoming" for item in today["lessons"][1:]))
 
     def test_today_recap_action_finishes_lesson(self):
-        self.learning.save_progress(self.seed.LESSON_ID, {"step": "recap"})
+        self.learning.save_progress(self.seed.FIRST_LESSON_ID, {"step": "recap"})
         today = self.learning.today()
         self.assertEqual(today["action"], "去复盘")
         self.assertEqual(today["page"], "today")
         self.assertTrue(today["has_next"])
 
     def test_today_advances_after_cafe_done(self):
-        self.learning.save_progress(self.seed.LESSON_ID, {"step": "done"})
+        first, second = self.seed.LESSONS[0], self.seed.LESSONS[1]
+        self.learning.save_progress(first["id"], {"step": "done"})
         today = self.learning.today()
-        self.assertEqual(today["lesson_id"], "greetings-a1")
-        self.assertEqual(today["title_zh"], "问候")
+        self.assertEqual(today["lesson_id"], second["id"])
+        self.assertEqual(today["title_zh"], second["title_zh"])
         self.assertEqual(today["action"], "开始第 2 课")
         self.assertTrue(today["has_next"])
-        self.assertEqual(
-            [item["status"] for item in today["lessons"]],
-            ["done", "current", "upcoming", "upcoming", "upcoming"],
-        )
+        self.assertEqual(today["lessons"][0]["status"], "done")
+        self.assertEqual(today["lessons"][1]["status"], "current")
         overview = self.learning.progress_overview()
-        self.assertEqual([item["id"] for item in overview["completed_lessons"]], ["cafe-order-a1"])
+        self.assertEqual([item["id"] for item in overview["completed_lessons"]], [first["id"]])
         month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")
         self.assertEqual(month1["status"], "in_progress")
 
     def test_month1_done_after_three_lessons(self):
-        for lesson in self.seed.LESSONS:
-            if lesson["month"] == 1:
-                self.learning.save_progress(lesson["id"], {"step": "done"})
+        month1_lessons = [lesson for lesson in self.seed.LESSONS if lesson["month"] == 1]
+        for lesson in month1_lessons:
+            self.learning.save_progress(lesson["id"], {"step": "done"})
         today = self.learning.today()
-        self.assertEqual(today["lesson_id"], "asking-directions-a1")
-        self.assertEqual(today["title_zh"], "问路")
-        self.assertEqual(today["action"], "开始第 4 课")
+        self.assertEqual(today["lesson_id"], "cafe-order-a1")
+        self.assertEqual(today["title_zh"], "咖啡店点餐")
+        self.assertEqual(today["action"], f"开始第 {len(month1_lessons) + 1} 课")
         self.assertTrue(today["has_next"])
-        self.assertEqual(today["lessons"][3]["status"], "current")
+        self.assertEqual(today["lessons"][len(month1_lessons)]["status"], "current")
         overview = self.learning.progress_overview()
-        self.assertEqual(len(overview["completed_lessons"]), 3)
+        self.assertEqual(len(overview["completed_lessons"]), len(month1_lessons))
         month1 = next(item for item in overview["roadmap"] if item["id"] == "m1")
         month2 = next(item for item in overview["roadmap"] if item["id"] == "m2")
         self.assertEqual(month1["status"], "done")
         self.assertEqual(month1["label"], "已完成")
         self.assertEqual(month2["status"], "in_progress")
         self.assertEqual(overview["month_done"], 1)
-        self.assertEqual(overview["lesson_total"], 5)
-        self.assertEqual(len(overview["lessons"]), 5)
+        self.assertEqual(overview["lesson_total"], len(self.seed.LESSONS))
+        self.assertEqual(len(overview["lessons"]), len(self.seed.LESSONS))
 
     def test_month2_done_after_five_lessons(self):
+        for lesson in self.seed.LESSONS:
+            if lesson["month"] <= 2:
+                self.learning.save_progress(lesson["id"], {"step": "done"})
+        today = self.learning.today()
+        self.assertEqual(today["lesson_id"], "asking-directions-a1")
+        self.assertEqual(today["title_zh"], "问路")
+        self.assertTrue(today["has_next"])
+        overview = self.learning.progress_overview()
+        month2 = next(item for item in overview["roadmap"] if item["id"] == "m2")
+        month3 = next(item for item in overview["roadmap"] if item["id"] == "m3")
+        self.assertEqual(month2["status"], "done")
+        self.assertEqual(month3["status"], "in_progress")
+        self.assertEqual(overview["month_done"], 2)
+
+    def test_all_lessons_done(self):
         for lesson in self.seed.LESSONS:
             self.learning.save_progress(lesson["id"], {"step": "done"})
         today = self.learning.today()
@@ -293,12 +321,12 @@ class LearningDbTest(unittest.TestCase):
         self.assertFalse(today["has_next"])
         self.assertTrue(all(item["status"] == "done" for item in today["lessons"]))
         overview = self.learning.progress_overview()
-        self.assertEqual(len(overview["completed_lessons"]), 5)
-        month2 = next(item for item in overview["roadmap"] if item["id"] == "m2")
+        self.assertEqual(len(overview["completed_lessons"]), len(self.seed.LESSONS))
         month3 = next(item for item in overview["roadmap"] if item["id"] == "m3")
-        self.assertEqual(month2["status"], "done")
-        self.assertEqual(month3["status"], "pending")
-        self.assertEqual(overview["month_done"], 2)
+        month4 = next(item for item in overview["roadmap"] if item["id"] == "m4")
+        self.assertEqual(month3["status"], "done")
+        self.assertEqual(month4["status"], "pending")
+        self.assertEqual(overview["month_done"], 3)
 
     def test_overview_charts_follow_reviews(self):
         empty = self.learning.progress_overview()
@@ -385,6 +413,16 @@ class DialogueTest(unittest.TestCase):
         done = completed_goal_ids(
             "Excuse me. Where is the station? Thank you.",
             ASK_DIRECTIONS["goals"],
+        )
+        self.assertEqual(len(done), 3)
+
+    def test_book1_first_lesson_goals(self):
+        from app.dialogue import completed_goal_ids
+        from app.seed import FIRST_LESSON
+
+        done = completed_goal_ids(
+            "Excuse me. Is this your phone? Thank you.",
+            FIRST_LESSON["goals"],
         )
         self.assertEqual(len(done), 3)
 

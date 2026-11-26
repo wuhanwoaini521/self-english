@@ -1,4 +1,4 @@
-"""Scripted lesson practice. Voice and AI can replace this later."""
+"""Keyword checks for lesson talk. DeepSeek and voice sit in app.ai."""
 
 from __future__ import annotations
 

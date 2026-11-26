@@ -10,13 +10,13 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from . import seed
-from .dialogue import MODE, MODE_ZH, completed_goal_ids, hint_for, your_lines
+from . import ai, seed
+from .dialogue import MODE, MODE_ZH, hint_for, your_lines
 from .srs import REMEMBERED_DAYS, RESULTS, RESULT_ZH, iso, schedule
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEARNING_DB = ROOT / "data" / "learning.db"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 STEPS = seed.STEPS
 VOCAB_PHASES = seed.VOCAB_PHASES
 
@@ -155,6 +155,7 @@ def _init_schema(connection: sqlite3.Connection) -> None:
     _add_column(connection, "dialogue_lines", "marks_json", "TEXT NOT NULL DEFAULT '[]'")
     _add_column(connection, "lesson_progress", "revision", "INTEGER NOT NULL DEFAULT 1")
     _add_column(connection, "review_log", "operation_id", "TEXT")
+    _add_column(connection, "dialogue_sessions", "coach_json", "TEXT NOT NULL DEFAULT '{}'")
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS review_operation ON review_log(operation_id)")
     row = connection.execute("SELECT version FROM schema_version").fetchone()
     current = int(row["version"]) if row is not None else 0
@@ -781,13 +782,20 @@ def dialogue_state(lesson_id: str) -> dict:
                 "completed_goals": [],
                 "goals": [{"id": item["id"], "label_zh": item["label_zh"], "done": False} for item in goals],
                 "hint": None,
+                "reply_en": "",
+                "coach_zh": "",
+                "degraded": False,
+                "chat": ai.chat_status(),
+                "voice": ai.voice_status(),
                 "updated_at": None,
             }
         completed = json.loads(session["completed_goals_json"])
+        coach = _coach_out(session)
+        mode = session["mode"] or MODE
         return {
             "lesson_id": lesson_id,
-            "mode": session["mode"],
-            "mode_zh": MODE_ZH,
+            "mode": mode,
+            "mode_zh": coach.get("mode_zh") or MODE_ZH,
             "order_text": session["order_text"],
             "hints_shown": session["hints_shown"],
             "completed_goals": completed,
@@ -796,6 +804,11 @@ def dialogue_state(lesson_id: str) -> dict:
                 for item in goals
             ],
             "hint": hint_for(lines, session["hints_shown"] - 1) if session["hints_shown"] else None,
+            "reply_en": coach.get("reply_en") or "",
+            "coach_zh": coach.get("coach_zh") or "",
+            "degraded": bool(coach.get("degraded")),
+            "chat": ai.chat_status(),
+            "voice": ai.voice_status(),
             "updated_at": session["updated_at"],
         }
 
@@ -828,7 +841,8 @@ def submit_order(lesson_id: str, text: str, expected_revision=None) -> dict:
         connection.execute("BEGIN IMMEDIATE")
         _lesson_row(connection, lesson_id)
         goals = _goals(connection, lesson_id)
-        done = completed_goal_ids(text, goals)
+        turn = ai.review_talk(lesson_meta(lesson_id), goals, text)
+        done = turn.completed_ids
         session = connection.execute(
             "SELECT * FROM dialogue_sessions WHERE lesson_id = ?",
             (lesson_id,),
@@ -839,12 +853,36 @@ def submit_order(lesson_id: str, text: str, expected_revision=None) -> dict:
                 "expected_revision": expected_revision, "step": "talk",
                 "task_results": {goal["id"]: goal["id"] in done for goal in goals},
             })
-        _upsert_dialogue(connection, lesson_id, session, order_text=text, completed=done)
+        _upsert_dialogue(
+            connection,
+            lesson_id,
+            session,
+            order_text=text,
+            completed=done,
+            mode=turn.mode,
+            coach={
+                "reply_en": turn.reply_en,
+                "coach_zh": turn.coach_zh,
+                "degraded": turn.degraded,
+                "provider": turn.provider,
+                "mode_zh": turn.mode_zh,
+            },
+        )
         connection.commit()
     response = dialogue_state(lesson_id)
     if saved is not None:
         response["progress"] = saved
     return response
+
+
+def _coach_out(session: sqlite3.Row | None) -> dict:
+    if session is None or "coach_json" not in session.keys():
+        return {}
+    try:
+        data = json.loads(session["coach_json"] or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _upsert_dialogue(
@@ -855,36 +893,46 @@ def _upsert_dialogue(
     hints_shown: int | None = None,
     order_text: str | None = None,
     completed: list[str] | None = None,
+    mode: str | None = None,
+    coach: dict | None = None,
 ) -> None:
     now = iso()
+    current_coach = _coach_out(session)
+    if coach is not None:
+        current_coach = coach
+    coach_json = json.dumps(current_coach, ensure_ascii=False)
+    current_mode = mode or (session["mode"] if session is not None else MODE) or MODE
     if session is None:
         connection.execute(
             """
             INSERT INTO dialogue_sessions
-            (lesson_id, mode, order_text, hints_shown, completed_goals_json, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (lesson_id, mode, order_text, hints_shown, completed_goals_json, updated_at, coach_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lesson_id,
-                MODE,
+                current_mode,
                 order_text or "",
                 hints_shown or 0,
                 json.dumps(completed or [], ensure_ascii=False),
                 now,
+                coach_json,
             ),
         )
         return
     connection.execute(
         """
         UPDATE dialogue_sessions
-        SET order_text = ?, hints_shown = ?, completed_goals_json = ?, updated_at = ?
+        SET mode = ?, order_text = ?, hints_shown = ?, completed_goals_json = ?, updated_at = ?, coach_json = ?
         WHERE lesson_id = ?
         """,
         (
+            current_mode,
             session["order_text"] if order_text is None else order_text,
             session["hints_shown"] if hints_shown is None else hints_shown,
             session["completed_goals_json"] if completed is None else json.dumps(completed, ensure_ascii=False),
             now,
+            coach_json,
             lesson_id,
         ),
     )

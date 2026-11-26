@@ -107,7 +107,7 @@ button { cursor: pointer; }
 .frame {
   flex: 1;
   min-width: 0;
-  padding: 1rem 1rem 8rem;
+  padding: 1rem 1rem calc(7.5rem + env(safe-area-inset-bottom, 0px));
 }
 
 .topbar {
@@ -115,7 +115,7 @@ button { cursor: pointer; }
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
-  margin-bottom: 0.8rem;
+  margin-bottom: 1.1rem;
 }
 
 .mobile-only { display: block; }
@@ -175,7 +175,11 @@ button { cursor: pointer; }
   flex-direction: column;
 }
 
-.vocab-tabs { flex: 0 0 auto; }
+.vocab-tabs {
+  flex: 0 0 auto;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+}
 
 .card.vocab-card {
   flex: 1;
@@ -289,6 +293,21 @@ button.vocab-flip:hover { background: #ecece9; }
   margin: 0 0 0.8rem;
 }
 
+.library-card {
+  min-width: 0;
+  margin: 0 0 1.2rem;
+  padding: 1.25rem 1.15rem 1.5rem;
+}
+
+.library-card .search {
+  margin: 0 0 0.9rem;
+}
+
+.library-card > .row {
+  gap: 0.65rem;
+  margin: 0 0 0.35rem;
+}
+
 .kicker {
   margin: 0 0 0.35rem;
   color: var(--muted);
@@ -306,11 +325,18 @@ h1, h2 {
 
 .english {
   margin: 0;
-  font-family: var(--pixel);
-  font-size: clamp(1.45rem, 5.6vw, 1.95rem);
+  font-family: var(--sans);
+  font-size: 1.15rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1.22;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.vocab-face .english {
+  font-size: clamp(1.5rem, 5.4vw, 2rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
 }
 
 .zh { margin: 0.35rem 0 0; color: var(--zh); }
@@ -356,9 +382,14 @@ h1, h2 {
   margin: 0.2rem 0 0;
   line-height: 1.55;
 }
+.teach-note {
+  white-space: pre-wrap;
+}
 .teach-example {
-  font-family: var(--pixel);
-  font-size: 1.12rem;
+  font-family: var(--sans);
+  font-size: 1.15rem;
+  font-weight: 550;
+  line-height: 1.5;
 }
 .teach-card .teach-block { text-align: left; }
 
@@ -389,6 +420,12 @@ body.hide-zh .can-hide { display: none; }
   color: var(--ink);
 }
 
+.speak:disabled,
+.gloss-speak:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .speak-icon {
   display: block;
   width: 1.2rem;
@@ -410,6 +447,32 @@ body.hide-zh .can-hide { display: none; }
   border-top: 1px solid var(--line);
 }
 .list li:first-child { border-top: 0; }
+
+.library-list {
+  margin-top: 0.25rem;
+}
+
+.library-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.85rem;
+  align-items: center;
+  padding: 1.05rem 0;
+}
+
+.library-list .english,
+.library-list .zh,
+.library-list .kicker {
+  grid-column: 1;
+}
+
+.library-list .zh { margin-top: 0.2rem; }
+
+.library-list .speak {
+  grid-column: 2;
+  grid-row: 1 / span 4;
+  align-self: center;
+}
 
 .today-lesson-btn {
   display: block;
@@ -489,10 +552,10 @@ body.hide-zh .can-hide { display: none; }
 
 .quiz-block h2 {
   margin: 0;
-  font-family: var(--pixel);
+  font-family: var(--sans);
   font-size: 1.18rem;
-  font-weight: 600;
-  line-height: 1.3;
+  font-weight: 650;
+  line-height: 1.35;
 }
 
 .quiz-block .zh {
@@ -523,9 +586,10 @@ body.hide-zh .can-hide { display: none; }
 }
 
 .choice-en {
-  font-family: var(--pixel);
+  font-family: var(--sans);
   font-size: 1.08rem;
-  line-height: 1.3;
+  font-weight: 550;
+  line-height: 1.4;
 }
 
 .choice-zh {
@@ -550,7 +614,9 @@ body.hide-zh .can-hide { display: none; }
 }
 
 .english.sentence {
-  font-size: 1.25rem;
+  font-size: 1.28rem;
+  font-weight: 550;
+  letter-spacing: 0;
   line-height: 1.55;
 }
 
@@ -771,6 +837,19 @@ textarea { min-height: 7rem; resize: vertical; }
   border-radius: 0.7rem;
 }
 
+.talk-coach {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 0.9rem;
+  background: var(--fill);
+  border-radius: 0.7rem;
+  line-height: 1.55;
+}
+
+button.ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .talk-actions {
   display: flex;
   flex-direction: column;
@@ -829,6 +908,7 @@ textarea { min-height: 7rem; resize: vertical; }
 
 .tabbar .nav-btn {
   flex: 1;
+  min-width: 0;
   text-align: center;
   min-height: 3rem;
   padding: 0.3rem 0.2rem;
@@ -1110,6 +1190,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 @media (min-width: 860px) {
   .view, .view.is-vocab, .topbar { max-width: 50rem; margin-inline: auto; }
   .today-task { padding: 3.6rem 2rem 2rem; }
+}
+
+@media (max-width: 859px) {
+  .library-card { padding-bottom: 5.5rem; }
 }
 
 @media (max-width: 480px) {

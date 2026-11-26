@@ -65,16 +65,83 @@ async function api(path, options) {
   return body;
 }
 
+let spokenUtterance = null;
+let speakTimer = 0;
+let cachedVoices = [];
+
+function refreshVoices() {
+  if (!window.speechSynthesis || typeof window.speechSynthesis.getVoices !== "function") return [];
+  cachedVoices = window.speechSynthesis.getVoices() || [];
+  return cachedVoices;
+}
+
+function englishVoice() {
+  const voices = cachedVoices.length ? cachedVoices : refreshVoices();
+  const english = voices.filter((voice) => /^en\b/i.test(voice.lang) || /english/i.test(voice.name));
+  return (
+    english.find((voice) => /en-US/i.test(voice.lang)) ||
+    english.find((voice) => /en-GB/i.test(voice.lang)) ||
+    english[0] ||
+    null
+  );
+}
+
+function canSpeak() {
+  return Boolean(window.speechSynthesis);
+}
+
+function speakHint() {
+  if (!window.speechSynthesis) return "这台设备没有系统朗读。英文仍可以看、可以练。";
+  if (cachedVoices.length && !englishVoice()) {
+    return "手机里还没有英文语音。打开系统设置里的「文字转语音」，选用 Google 文字转语音并下载英语，媒体音量也要打开。页面上的英文仍可以看、可以练。";
+  }
+  return "现在读不出来。把媒体音量打开，并在系统设置里确认文字转语音可用。英文仍可以看、可以练。";
+}
+
 function speak(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return;
   if (!window.speechSynthesis) {
-    setError("这台设备现在不能朗读。");
+    setError(speakHint());
     return;
   }
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "en-US";
+  refreshVoices();
+  window.clearTimeout(speakTimer);
+  try {
+    window.speechSynthesis.resume();
+    window.speechSynthesis.cancel();
+  } catch {
+    setError(speakHint());
+    return;
+  }
+  const utterance = new SpeechSynthesisUtterance(clean);
+  const voice = englishVoice();
+  utterance.lang = voice && voice.lang ? voice.lang : "en-US";
   utterance.rate = 0.84;
-  window.speechSynthesis.speak(utterance);
+  if (voice) utterance.voice = voice;
+  utterance.onerror = (event) => {
+    if (event.error === "interrupted" || event.error === "canceled") return;
+    setError(speakHint());
+  };
+  spokenUtterance = utterance;
+  const start = () => {
+    try {
+      window.speechSynthesis.resume();
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      setError(speakHint());
+    }
+  };
+  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    speakTimer = window.setTimeout(start, 80);
+  } else {
+    start();
+  }
+}
+
+if (window.speechSynthesis) {
+  refreshVoices();
+  window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
 }
 
 function paintNav() {
@@ -324,7 +391,12 @@ function speakButton(text) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "speak";
-  button.setAttribute("aria-label", "用设备语音朗读");
+  const available = canSpeak();
+  button.setAttribute("aria-label", available ? "用设备语音朗读" : "这台设备不能朗读");
+  button.title = available
+    ? "用这台设备的系统语音朗读，不是录音"
+    : "这台设备没有系统朗读。英文仍可以看、可以练。";
+  if (!available) button.disabled = true;
   button.append(speakIcon());
   button.addEventListener("click", () => speak(text));
   return button;
@@ -399,7 +471,11 @@ function openGloss(anchor, mark) {
   const speakBtn = document.createElement("button");
   speakBtn.type = "button";
   speakBtn.className = "gloss-speak";
-  speakBtn.setAttribute("aria-label", "朗读");
+  speakBtn.setAttribute("aria-label", canSpeak() ? "朗读" : "这台设备不能朗读");
+  speakBtn.title = canSpeak()
+    ? "用这台设备的系统语音朗读，不是录音"
+    : "这台设备没有系统朗读。英文仍可以看、可以练。";
+  if (!canSpeak()) speakBtn.disabled = true;
   speakBtn.append(speakIcon());
   speakBtn.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -988,7 +1064,7 @@ function renderTeachCard(item, index, total) {
     note.className = "teach-block";
     const title = document.createElement("p");
     title.className = "kicker";
-    title.textContent = "怎么记";
+    title.textContent = item.kind === "grammar" ? "语法" : "怎么记";
     const body = document.createElement("p");
     body.className = "teach-note";
     body.textContent = item.note_zh;
@@ -1123,7 +1199,7 @@ function renderRecallCard(item, index, total) {
 
 function renderLibrary() {
   const panel = document.createElement("section");
-  panel.className = "card";
+  panel.className = "card library-card";
   if (!state.catalog) return banner("loading", "正在打开词句库…");
   if (!state.catalog.ready) {
     const empty = banner("empty", state.catalog.hint || "还没有词库。", state.catalog.failed && (() => loadCatalog(true).then(render)));
@@ -1153,12 +1229,11 @@ function renderLibrary() {
     books.append(button);
   });
   const list = document.createElement("ul");
-  list.className = "list";
+  list.className = "list library-list";
   state.catalogItems.forEach((item) => {
     const row = document.createElement("li");
     const en = document.createElement("p");
     en.className = "english";
-    en.style.fontSize = "1.25rem";
     en.textContent = item.english;
     const zh = document.createElement("p");
     zh.className = "zh can-hide";
@@ -1195,7 +1270,7 @@ function renderPassage(passage, index) {
   title.textContent = passage.title_zh || "短文";
   const help = document.createElement("p");
   help.className = "audio-tag";
-  help.textContent = "浅蓝虚线是生词，紫色实线是语法。点喇叭，用这台设备的声音读出来，不是录音。";
+  help.textContent = "浅蓝虚线是生词，紫色实线是语法。点喇叭，用这台设备的系统语音读出来，不是录音。没声音时先开媒体音量。";
   card.append(kicker, title, help);
   const total = passage.paragraphs.length;
   kicker.textContent = `短文 · 第 ${index + 1} / ${total} 段`;
@@ -1234,7 +1309,7 @@ function renderReading() {
   listenTitle.textContent = "短对话";
   const listenHelp = document.createElement("p");
   listenHelp.className = "audio-tag";
-  listenHelp.textContent = "点喇叭，用这台设备的声音读出来。";
+  listenHelp.textContent = "点喇叭，用这台设备的系统语音读出来。没声音时先开媒体音量。";
   card.append(listenKicker, listenTitle, listenHelp);
   state.lesson.dialogue.forEach((line) => card.append(renderScriptLine(line)));
   root.append(cardDeck(card, index, paragraphs + 1, changePage, "听读"));
@@ -1342,13 +1417,16 @@ function renderTalk() {
   turn.className = "card";
   const kicker = document.createElement("p");
   kicker.className = "kicker";
-  kicker.textContent = "你的回复";
+  kicker.textContent = session?.mode_zh || "你的回复";
   const title = document.createElement("h1");
   title.textContent = task.title_zh || "写出你的英文";
   const brief = document.createElement("p");
   brief.className = "talk-brief";
   brief.textContent = task.brief_zh || "先看对方说了什么，再自己用英文写回复。";
   turn.append(kicker, title, brief);
+  if (session?.degraded) {
+    turn.append(banner("empty", session.coach_zh || "DeepSeek 暂时不可用，已改回关键词检查。"));
+  }
 
   const goalList = session?.goals || [];
   const allDone = goalList.length > 0 && goalList.every((goal) => goal.done);
@@ -1387,6 +1465,24 @@ function renderTalk() {
   });
   turn.append(areaLabel, area);
 
+  if (session?.reply_en) {
+    const reply = document.createElement("div");
+    reply.className = "teach-block";
+    const replyKicker = document.createElement("p");
+    replyKicker.className = "kicker";
+    replyKicker.textContent = "对方说";
+    const replyEn = document.createElement("p");
+    replyEn.className = "teach-example";
+    replyEn.textContent = session.reply_en;
+    reply.append(replyKicker, replyEn, speakButton(session.reply_en));
+    turn.append(reply);
+  }
+  if (session?.coach_zh && !session.degraded) {
+    const coach = document.createElement("p");
+    coach.className = "talk-coach";
+    coach.textContent = session.coach_zh;
+    turn.append(coach);
+  }
   if (allDone) {
     const ok = document.createElement("p");
     ok.className = "talk-ok";
@@ -1426,7 +1522,7 @@ function renderTalk() {
   submit.addEventListener("click", async () => {
     const previous = submit.textContent;
     submit.disabled = true;
-    submit.textContent = "正在检查…";
+    submit.textContent = session?.chat?.available ? "正在请 DeepSeek 看…" : "正在检查…";
     try {
       state.talkDraft = area.value;
       state.dialogue = await api(`/api/dialogue/${state.lesson.id}/order`, {
@@ -1456,6 +1552,12 @@ function renderTalk() {
       setError(error.message);
     }
   });
+  const voice = document.createElement("button");
+  voice.type = "button";
+  voice.className = "ghost";
+  voice.disabled = true;
+  voice.textContent = session?.voice?.label_zh || "实时语音还没接入";
+  voice.setAttribute("aria-disabled", "true");
   const back = document.createElement("button");
   back.type = "button";
   back.className = "ghost";
@@ -1468,10 +1570,10 @@ function renderTalk() {
   secondary.className = "talk-actions-row";
   if (allDone) {
     secondary.append(submit, back);
-    actions.append(recap, secondary);
+    actions.append(recap, secondary, voice);
   } else {
     secondary.append(hint, back);
-    actions.append(submit, secondary, recap);
+    actions.append(submit, secondary, voice, recap);
   }
   turn.append(actions);
   root.append(turn);

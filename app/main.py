@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import catalog, learning
+from . import ai, catalog, learning
 STATIC = learning.ROOT / "app" / "static"
 
 
@@ -134,6 +134,16 @@ def dialogue_hint(lesson_id: str) -> dict:
 @app.post("/api/dialogue/{lesson_id}/order")
 def dialogue_order(lesson_id: str, body: dict) -> dict:
     return learning.submit_order(lesson_id, body.get("text", ""), body.get("expected_revision"))
+
+
+@app.get("/api/ai/status")
+def ai_status() -> dict:
+    return ai.status()
+
+
+@app.post("/api/voice/session")
+def voice_session() -> dict:
+    raise HTTPException(status_code=503, detail=ai.start_message())
 
 
 @app.get("/api/progress")
