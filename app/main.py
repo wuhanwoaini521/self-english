@@ -106,9 +106,9 @@ def post_review_card(body: dict) -> dict:
 def post_review_result(expression_id: str, body: dict) -> dict:
     result = (body or {}).get("result")
     mapping = {"忘了": "forgot", "模糊": "fuzzy", "记得": "remembered"}
-    if result in mapping:
+    if isinstance(result, str) and result in mapping:
         result = mapping[result]
-    return learning.grade_review(expression_id, result or "")
+    return learning.grade_review(expression_id, result, body.get("operation_id"), body.get("progress"), body.get("expected_due"))
 
 
 @app.get("/api/review/due")
@@ -133,7 +133,7 @@ def dialogue_hint(lesson_id: str) -> dict:
 
 @app.post("/api/dialogue/{lesson_id}/order")
 def dialogue_order(lesson_id: str, body: dict) -> dict:
-    return learning.submit_order(lesson_id, (body or {}).get("text") or "")
+    return learning.submit_order(lesson_id, body.get("text", ""), body.get("expected_revision"))
 
 
 @app.get("/api/progress")

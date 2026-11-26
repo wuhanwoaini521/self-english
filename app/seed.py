@@ -3,6 +3,68 @@
 from __future__ import annotations
 
 SOURCE_NOTE = "本课为 self-english 原创种子，供个人学习。无真人录音，朗读使用设备系统语音。"
+MARK_KINDS = ("vocab", "grammar")
+
+
+def _mark(text: str, *, kind: str, phonetic: str, pos: str, sense_zh: str, headword: str = "") -> dict:
+    if kind not in MARK_KINDS:
+        raise ValueError(f"unknown mark kind: {kind}")
+    return {
+        "text": text,
+        "kind": kind,
+        "headword": headword or text,
+        "phonetic": phonetic,
+        "pos": pos,
+        "sense_zh": sense_zh,
+    }
+
+
+def vocab(text: str, *, phonetic: str, pos: str, sense_zh: str, headword: str = "") -> dict:
+    return _mark(text, kind="vocab", phonetic=phonetic, pos=pos, sense_zh=sense_zh, headword=headword)
+
+
+def grammar(text: str, *, sense_zh: str, phonetic: str = "", pos: str = "语法", headword: str = "") -> dict:
+    return _mark(text, kind="grammar", phonetic=phonetic, pos=pos, sense_zh=sense_zh, headword=headword)
+
+
+def join_parts(parts: tuple[object, ...]) -> tuple[str, list[dict]]:
+    chunks: list[str] = []
+    marks: list[dict] = []
+    for part in parts:
+        if isinstance(part, str):
+            chunks.append(part)
+            continue
+        start = sum(len(chunk) for chunk in chunks)
+        text = part["text"]
+        chunks.append(text)
+        marks.append(
+            {
+                "start": start,
+                "end": start + len(text),
+                "kind": part["kind"],
+                "headword": part["headword"],
+                "phonetic": part["phonetic"],
+                "pos": part["pos"],
+                "sense_zh": part["sense_zh"],
+            }
+        )
+    return "".join(chunks), marks
+
+
+def _line(speaker: str, speaker_zh: str, chinese: str, *parts: object) -> dict:
+    english, marks = join_parts(parts)
+    return {
+        "speaker": speaker,
+        "speaker_zh": speaker_zh,
+        "english": english,
+        "chinese": chinese,
+        "marks": marks,
+    }
+
+
+def _para(chinese: str, *parts: object) -> dict:
+    english, marks = join_parts(parts)
+    return {"english": english, "chinese": chinese, "marks": marks}
 
 
 def _expr(
@@ -42,9 +104,10 @@ def _lesson(
     brief_zh: str,
     hear_label_zh: str,
     expressions: list[dict],
-    dialogue: list[tuple[str, str, str, str]],
+    dialogue: list[dict],
     questions: list[dict],
     goals: list[tuple[str, str, list[str]]],
+    passage: dict,
 ) -> dict:
     return {
         "id": lesson_id,
@@ -80,14 +143,19 @@ def _lesson(
         "dialogue": [
             {
                 "id": f"{lesson_id}.line-{index}",
-                "speaker": speaker,
-                "speaker_zh": speaker_zh,
-                "english": english,
-                "chinese": chinese,
+                "speaker": item["speaker"],
+                "speaker_zh": item["speaker_zh"],
+                "english": item["english"],
+                "chinese": item["chinese"],
+                "marks": item["marks"],
                 "sort_order": index,
             }
-            for index, (speaker, speaker_zh, english, chinese) in enumerate(dialogue, start=1)
+            for index, item in enumerate(dialogue, start=1)
         ],
+        "passage": {
+            "title_zh": passage.get("title_zh") or "短文",
+            "paragraphs": list(passage.get("paragraphs") or []),
+        },
         "questions": [
             {**item, "id": f"{lesson_id}.{item['id']}", "sort_order": index}
             for index, item in enumerate(questions, start=1)
@@ -109,7 +177,7 @@ CAFE_ORDER = _lesson(
     title="Ordering coffee",
     title_zh="咖啡店点餐",
     task_title_zh="点一杯咖啡",
-    task_placeholder="在这里写你要说的英文，例如 I would like a cup of coffee, please. Thank you.",
+    task_placeholder="用英文写出你要点的东西。",
     submit_label="提交我的话",
     empty_error="先写你要点的东西。",
     brief_zh="你是客人。店员已经问你想喝什么。不要抄整段剧本，自己用英文把点单写出来：要有 coffee，用上 please，再说 thank you。",
@@ -172,11 +240,56 @@ CAFE_ORDER = _lesson(
         ),
     ],
     dialogue=[
-        ("clerk", "店员", "Hello. What would you like?", "你好。你想要什么？"),
-        ("you", "你", "I would like a cup of coffee, please.", "我想要一杯咖啡。"),
-        ("clerk", "店员", "Sure. Here you are.", "好的。给你。"),
-        ("you", "你", "Thank you.", "谢谢。"),
+        _line(
+            "clerk",
+            "店员",
+            "你好。你想要什么？",
+            "Hello. What ",
+            grammar("would you like", phonetic="/wʊd juː laɪk/", pos="动词短语", sense_zh="想要（礼貌问法）"),
+            "?",
+        ),
+        _line(
+            "you",
+            "你",
+            "我想要一杯咖啡。",
+            grammar("I would like", phonetic="/aɪ wʊd laɪk/", pos="动词短语", sense_zh="我想要（比 I want 客气）"),
+            " a cup of ",
+            vocab("coffee", phonetic="/ˈkɔːfi/", pos="名词", sense_zh="咖啡"),
+            ", please.",
+        ),
+        _line(
+            "clerk",
+            "店员",
+            "好的。给你。",
+            "Sure. ",
+            vocab("Here you are", phonetic="/hɪr juː ɑːr/", pos="短语", sense_zh="给你"),
+            ".",
+        ),
+        _line(
+            "you",
+            "你",
+            "谢谢。",
+            vocab("Thank you", phonetic="/θæŋk juː/", pos="短语", sense_zh="谢谢"),
+            ".",
+        ),
     ],
+    passage={
+        "title_zh": "短文",
+        "paragraphs": [
+            _para(
+                "我在咖啡馆。我想要一杯拿铁。谢谢。",
+                "I am at a ",
+                vocab("cafe", phonetic="/kæˈfeɪ/", pos="名词", sense_zh="咖啡馆"),
+                ". ",
+                grammar("I'd like", phonetic="/aɪd laɪk/", pos="动词短语", sense_zh="我想要（I would like 的缩写）"),
+                " a ",
+                vocab("latte", phonetic="/ˈlɑː.teɪ/", pos="名词", sense_zh="拿铁咖啡"),
+                ", please. ",
+                vocab("Thank you", phonetic="/θæŋk juː/", pos="短语", sense_zh="谢谢"),
+                ".",
+            )
+        ],
+    },
     questions=[
         {
             "id": "q1",
@@ -213,7 +326,7 @@ GREETINGS = _lesson(
     title="Saying hello",
     title_zh="问候",
     task_title_zh="用英文打招呼",
-    task_placeholder="在这里写你要说的英文，例如 Hello. How are you? I'm fine. Nice to meet you.",
+    task_placeholder="用英文写出你要说的话。",
     submit_label="提交我的话",
     empty_error="先写一句英文。",
     brief_zh="邻居在跟你打招呼。用英文回应：先打招呼，问好，再说很高兴认识你。",
@@ -276,11 +389,52 @@ GREETINGS = _lesson(
         ),
     ],
     dialogue=[
-        ("neighbor", "邻居", "Hello.", "你好。"),
-        ("you", "你", "Hello. How are you?", "你好。你好吗？"),
-        ("neighbor", "邻居", "I'm fine, thank you. And you?", "我很好，谢谢。你呢？"),
-        ("you", "你", "I'm fine. Nice to meet you.", "我很好。很高兴认识你。"),
+        _line(
+            "neighbor",
+            "邻居",
+            "你好。",
+            vocab("Hello", phonetic="/həˈloʊ/", pos="短语", sense_zh="你好"),
+            ".",
+        ),
+        _line(
+            "you",
+            "你",
+            "你好。你好吗？",
+            "Hello. ",
+            grammar("How are you", phonetic="/haʊ ɑːr juː/", pos="疑问句", sense_zh="问候近况"),
+            "?",
+        ),
+        _line(
+            "neighbor",
+            "邻居",
+            "我很好，谢谢。你呢？",
+            grammar("I'm", phonetic="/aɪm/", pos="缩写", sense_zh="I am 的缩写"),
+            " fine, thank you. And you?",
+        ),
+        _line(
+            "you",
+            "你",
+            "我很好。很高兴认识你。",
+            "I'm fine. ",
+            vocab("Nice to meet you", phonetic="/naɪs tə miːt juː/", pos="短语", sense_zh="很高兴认识你"),
+            ".",
+        ),
     ],
+    passage={
+        "title_zh": "短文",
+        "paragraphs": [
+            _para(
+                "我遇见邻居。你好吗？我很好。很高兴认识你。",
+                "I meet my ",
+                vocab("neighbor", phonetic="/ˈneɪbər/", pos="名词", sense_zh="邻居"),
+                ". ",
+                grammar("How are you", phonetic="/haʊ ɑːr juː/", pos="疑问句", sense_zh="问候近况"),
+                "? I'm fine. ",
+                vocab("Nice to meet you", phonetic="/naɪs tə miːt juː/", pos="短语", sense_zh="很高兴认识你"),
+                ".",
+            )
+        ],
+    },
     questions=[
         {
             "id": "q1",
@@ -317,7 +471,7 @@ SAY_AGAIN = _lesson(
     title="Please say that again",
     title_zh="请对方再说一次",
     task_title_zh="请对方再说一次",
-    task_placeholder="在这里写你要说的英文，例如 Sorry. I don't understand. Please say that again.",
+    task_placeholder="用英文写出你要说的话。",
     submit_label="提交我的话",
     empty_error="先写一句英文。",
     brief_zh="你没听清店员的话。用英文请对方再说一次：先说 sorry，说听不懂，再请对方 repeat。",
@@ -380,11 +534,61 @@ SAY_AGAIN = _lesson(
         ),
     ],
     dialogue=[
-        ("clerk", "店员", "What would you like?", "你想要什么？"),
-        ("you", "你", "Sorry. I don't understand.", "对不起。我听不懂。"),
-        ("clerk", "店员", "Coffee or tea?", "咖啡还是茶？"),
-        ("you", "你", "Please say that again, slowly, please.", "请再说一次，请慢一点。"),
+        _line(
+            "clerk",
+            "店员",
+            "你想要什么？",
+            "What ",
+            grammar("would you like", phonetic="/wʊd juː laɪk/", pos="动词短语", sense_zh="想要（礼貌问法）"),
+            "?",
+        ),
+        _line(
+            "you",
+            "你",
+            "对不起。我听不懂。",
+            vocab("Sorry", phonetic="/ˈsɑːri/", pos="短语", sense_zh="对不起"),
+            ". I ",
+            grammar("don't", phonetic="/doʊnt/", pos="助动词", sense_zh="不（do not 的缩写）"),
+            " ",
+            vocab("understand", phonetic="/ˌʌndərˈstænd/", pos="动词", sense_zh="懂、明白"),
+            ".",
+        ),
+        _line(
+            "clerk",
+            "店员",
+            "咖啡还是茶？",
+            vocab("Coffee", phonetic="/ˈkɔːfi/", pos="名词", sense_zh="咖啡", headword="coffee"),
+            " or ",
+            vocab("tea", phonetic="/tiː/", pos="名词", sense_zh="茶"),
+            "?",
+        ),
+        _line(
+            "you",
+            "你",
+            "请再说一次，请慢一点。",
+            "Please ",
+            vocab("say that again", phonetic="/seɪ ðæt əˈɡen/", pos="短语", sense_zh="再说一次"),
+            ", ",
+            vocab("slowly", phonetic="/ˈsloʊli/", pos="副词", sense_zh="慢慢地"),
+            ", please.",
+        ),
     ],
+    passage={
+        "title_zh": "短文",
+        "paragraphs": [
+            _para(
+                "对不起。我听不懂。请再说一次。",
+                vocab("Sorry", phonetic="/ˈsɑːri/", pos="短语", sense_zh="对不起"),
+                ". I ",
+                grammar("don't", phonetic="/doʊnt/", pos="助动词", sense_zh="不（do not 的缩写）"),
+                " ",
+                vocab("understand", phonetic="/ˌʌndərˈstænd/", pos="动词", sense_zh="懂、明白"),
+                ". Please ",
+                vocab("say that again", phonetic="/seɪ ðæt əˈɡen/", pos="短语", sense_zh="再说一次"),
+                ".",
+            )
+        ],
+    },
     questions=[
         {
             "id": "q1",

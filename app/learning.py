@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from .srs import REMEMBERED_DAYS, RESULTS, RESULT_ZH, iso, schedule
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEARNING_DB = ROOT / "data" / "learning.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 STEPS = seed.STEPS
 VOCAB_PHASES = seed.VOCAB_PHASES
 
@@ -79,6 +80,13 @@ def _init_schema(connection: sqlite3.Connection) -> None:
             chinese TEXT NOT NULL,
             audio_url TEXT,
             sort_order INTEGER NOT NULL,
+            marks_json TEXT NOT NULL DEFAULT '[]',
+            FOREIGN KEY (lesson_id) REFERENCES lessons(id)
+        );
+        CREATE TABLE IF NOT EXISTS passages (
+            lesson_id TEXT PRIMARY KEY,
+            title_zh TEXT NOT NULL,
+            paragraphs_json TEXT NOT NULL,
             FOREIGN KEY (lesson_id) REFERENCES lessons(id)
         );
         CREATE TABLE IF NOT EXISTS questions (
@@ -144,6 +152,10 @@ def _init_schema(connection: sqlite3.Connection) -> None:
     _add_column(connection, "expressions", "example_zh", "TEXT NOT NULL DEFAULT ''")
     _add_column(connection, "expressions", "mark", "TEXT NOT NULL DEFAULT ''")
     _add_column(connection, "lesson_progress", "vocab_phase", "TEXT NOT NULL DEFAULT 'learn'")
+    _add_column(connection, "dialogue_lines", "marks_json", "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(connection, "lesson_progress", "revision", "INTEGER NOT NULL DEFAULT 1")
+    _add_column(connection, "review_log", "operation_id", "TEXT")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS review_operation ON review_log(operation_id)")
     row = connection.execute("SELECT version FROM schema_version").fetchone()
     current = int(row["version"]) if row is not None else 0
     if current < 3:
@@ -202,12 +214,38 @@ def seed_lesson(connection: sqlite3.Connection) -> None:
         for item in lesson["dialogue"]:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO dialogue_lines
-                (id, lesson_id, speaker, speaker_zh, english, chinese, audio_url, sort_order)
-                VALUES (:id, :lesson_id, :speaker, :speaker_zh, :english, :chinese, NULL, :sort_order)
+                INSERT INTO dialogue_lines
+                (id, lesson_id, speaker, speaker_zh, english, chinese, audio_url, sort_order, marks_json)
+                VALUES (:id, :lesson_id, :speaker, :speaker_zh, :english, :chinese, NULL, :sort_order, :marks_json)
+                ON CONFLICT(id) DO UPDATE SET
+                    speaker = excluded.speaker,
+                    speaker_zh = excluded.speaker_zh,
+                    english = excluded.english,
+                    chinese = excluded.chinese,
+                    sort_order = excluded.sort_order,
+                    marks_json = excluded.marks_json
                 """,
-                {**item, "lesson_id": lesson["id"]},
+                {
+                    **item,
+                    "lesson_id": lesson["id"],
+                    "marks_json": json.dumps(item.get("marks") or [], ensure_ascii=False),
+                },
             )
+        passage = lesson.get("passage") or {}
+        connection.execute(
+            """
+            INSERT INTO passages (lesson_id, title_zh, paragraphs_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(lesson_id) DO UPDATE SET
+                title_zh = excluded.title_zh,
+                paragraphs_json = excluded.paragraphs_json
+            """,
+            (
+                lesson["id"],
+                passage.get("title_zh") or "短文",
+                json.dumps(passage.get("paragraphs") or [], ensure_ascii=False),
+            ),
+        )
         for item in lesson["questions"]:
             connection.execute(
                 """
@@ -273,6 +311,7 @@ def _default_progress(lesson_id: str) -> dict:
         "question_results": {},
         "task_results": {},
         "updated_at": None,
+        "revision": 0,
     }
 
 
@@ -289,6 +328,7 @@ def _progress_out(row: sqlite3.Row | None, lesson_id: str) -> dict:
         "question_results": json.loads(row["question_results_json"]),
         "task_results": json.loads(row["task_results_json"]),
         "updated_at": row["updated_at"],
+        "revision": int(row["revision"]) if "revision" in row.keys() and row["revision"] is not None else 0,
     }
 
 
@@ -307,6 +347,66 @@ def _goals(connection: sqlite3.Connection, lesson_id: str) -> list[dict]:
     ]
 
 
+def _marks_out(raw) -> list[dict]:
+    if not raw:
+        return []
+    items = json.loads(raw) if isinstance(raw, str) else raw
+    out: list[dict] = []
+    last_end = 0
+    for item in items or []:
+        kind = item.get("kind")
+        if kind not in ("vocab", "grammar"):
+            continue
+        try:
+            start = int(item.get("start"))
+            end = int(item.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if end <= start or start < last_end:
+            continue
+        out.append(
+            {
+                "start": start,
+                "end": end,
+                "kind": kind,
+                "headword": item.get("headword") or "",
+                "phonetic": item.get("phonetic") or "",
+                "pos": item.get("pos") or "",
+                "sense_zh": item.get("sense_zh") or "",
+            }
+        )
+        last_end = end
+    return out
+
+
+def _paragraphs_out(raw) -> list[dict]:
+    items = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    paragraphs: list[dict] = []
+    for item in items:
+        english = item.get("english") or ""
+        paragraphs.append(
+            {
+                "english": english,
+                "chinese": item.get("chinese") or "",
+                "marks": _marks_out(item.get("marks") or []),
+            }
+        )
+    return paragraphs
+
+
+def _passage_out(connection: sqlite3.Connection, lesson_id: str) -> dict | None:
+    row = connection.execute(
+        "SELECT title_zh, paragraphs_json FROM passages WHERE lesson_id = ?",
+        (lesson_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    paragraphs = _paragraphs_out(row["paragraphs_json"])
+    if not paragraphs:
+        return None
+    return {"title_zh": row["title_zh"], "paragraphs": paragraphs}
+
+
 def _lines(connection: sqlite3.Connection, lesson_id: str) -> list[dict]:
     rows = connection.execute(
         "SELECT * FROM dialogue_lines WHERE lesson_id = ? ORDER BY sort_order",
@@ -319,6 +419,7 @@ def _lines(connection: sqlite3.Connection, lesson_id: str) -> list[dict]:
             "speaker_zh": row["speaker_zh"],
             "english": row["english"],
             "chinese": row["chinese"],
+            "marks": _marks_out(row["marks_json"] if "marks_json" in row.keys() else "[]"),
             "audio": "system",
             "audio_label": "系统朗读",
         }
@@ -372,6 +473,7 @@ def lesson_payload(lesson_id: str) -> dict:
             "step_zh": seed.STEP_ZH,
             "expressions": expressions,
             "dialogue": _lines(connection, lesson_id),
+            "passage": _passage_out(connection, lesson_id),
             "questions": questions,
             "goals": [
                 {"id": item["id"], "label_zh": item["label_zh"]}
@@ -456,73 +558,83 @@ def today() -> dict:
 
 
 def save_progress(lesson_id: str, payload: dict) -> dict:
-    step = payload.get("step")
-    if step not in STEPS:
-        raise HTTPException(status_code=400, detail="步骤不对。")
-    hide_zh = 1 if payload.get("hide_zh") else 0
-    vocab_index = int(payload.get("vocab_index") or 0)
-    listen_index = int(payload.get("listen_index") or 0)
-    if vocab_index < 0 or listen_index < 0:
-        raise HTTPException(status_code=400, detail="进度不能是负数。")
-    vocab_phase = payload.get("vocab_phase")
-    if vocab_phase is not None and vocab_phase not in VOCAB_PHASES:
-        raise HTTPException(status_code=400, detail="词汇阶段不对。")
-    question_results = payload.get("question_results") or {}
-    task_results = payload.get("task_results") or {}
-    if not isinstance(question_results, dict) or not isinstance(task_results, dict):
-        raise HTTPException(status_code=400, detail="答题结果格式不对。")
-    expected = payload.get("expected_updated_at")
-    now = iso()
     with connect() as connection:
-        _lesson_row(connection, lesson_id)
-        current = _progress_row(connection, lesson_id)
-        if vocab_phase is None:
-            if current is not None and "vocab_phase" in current.keys():
-                vocab_phase = current["vocab_phase"] or "learn"
-            else:
-                vocab_phase = "learn"
-        if current is not None and current["updated_at"] != expected:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "另一端已经更新了进度。",
-                    "progress": _progress_out(current, lesson_id),
-                },
-            )
-        connection.execute(
-            """
-            INSERT INTO lesson_progress (
-                lesson_id, step, vocab_index, vocab_phase, listen_index, hide_zh,
-                question_results_json, task_results_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(lesson_id) DO UPDATE SET
-                step = excluded.step,
-                vocab_index = excluded.vocab_index,
-                vocab_phase = excluded.vocab_phase,
-                listen_index = excluded.listen_index,
-                hide_zh = excluded.hide_zh,
-                question_results_json = excluded.question_results_json,
-                task_results_json = excluded.task_results_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                lesson_id,
-                step,
-                vocab_index,
-                vocab_phase,
-                listen_index,
-                hide_zh,
-                json.dumps(question_results, ensure_ascii=False),
-                json.dumps(task_results, ensure_ascii=False),
-                now,
-            ),
-        )
-        connection.commit()
-        return _progress_out(_progress_row(connection, lesson_id), lesson_id)
+        connection.execute("BEGIN IMMEDIATE")
+        return _save_progress(connection, lesson_id, payload)
+
+
+def _save_progress(connection, lesson_id: str, payload: dict) -> dict:
+    _lesson_row(connection, lesson_id)
+    current = _progress_out(_progress_row(connection, lesson_id), lesson_id)
+    expected = payload.get("expected_revision")
+    if "expected_revision" in payload:
+        try:
+            expected = int(expected)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "进度版本不对。")
+        if expected < 0:
+            raise HTTPException(400, "进度版本不对。")
+        conflict = int(current["revision"] or 0) != expected
+    elif "expected_updated_at" in payload:
+        conflict = current["updated_at"] != payload.get("expected_updated_at")
+    else:
+        conflict = current["updated_at"] is not None
+    values = {**current, **payload}
+    step = values["step"]
+    vocab_phase = values["vocab_phase"]
+    if step not in STEPS or vocab_phase not in VOCAB_PHASES:
+        raise HTTPException(400, "学习步骤不对。")
+    step = max((step, current["step"]), key=STEPS.index)
+    vocab_index, listen_index = values["vocab_index"], values["listen_index"]
+    if any(type(idx) is not int or not 0 <= idx <= 2147483647 for idx in (vocab_index, listen_index)):
+        raise HTTPException(400, "学习位置不对。")
+    hide_zh = int(bool(values["hide_zh"]))
+    question_results, task_results = values["question_results"], values["task_results"]
+    if not isinstance(question_results, dict) or not isinstance(task_results, dict):
+        raise HTTPException(400, "答题结果格式不对。")
+    if conflict:
+        raise HTTPException(409, {"message": "另一端已经更新了进度。", "progress": current})
+    now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    cursor = connection.execute(
+        """
+        INSERT INTO lesson_progress (
+            lesson_id, step, vocab_index, vocab_phase, listen_index, hide_zh,
+            question_results_json, task_results_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(lesson_id) DO UPDATE SET
+            revision = lesson_progress.revision + 1,
+            step = excluded.step,
+            vocab_index = excluded.vocab_index,
+            vocab_phase = excluded.vocab_phase,
+            listen_index = excluded.listen_index,
+            hide_zh = excluded.hide_zh,
+            question_results_json = excluded.question_results_json,
+            task_results_json = excluded.task_results_json,
+            updated_at = excluded.updated_at
+        WHERE lesson_progress.revision = ?
+        """,
+        (
+            lesson_id,
+            step,
+            vocab_index,
+            vocab_phase,
+            listen_index,
+            hide_zh,
+            json.dumps(question_results, ensure_ascii=False),
+            json.dumps(task_results, ensure_ascii=False),
+            now,
+            current["revision"],
+        ),
+    )
+    saved = _progress_out(_progress_row(connection, lesson_id), lesson_id)
+    if cursor.rowcount == 0:
+        raise HTTPException(409, {"message": "另一端已经更新了进度。", "progress": saved})
+    return saved
 
 
 def add_review(expression_id: str) -> dict:
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM expressions WHERE id = ?", (expression_id,)
         ).fetchone()
@@ -551,10 +663,15 @@ def add_review(expression_id: str) -> dict:
         return {**dict(saved), "created": True}
 
 
-def grade_review(expression_id: str, result: str) -> dict:
+def grade_review(expression_id: str, result: str, operation_id=None, progress_patch=None, expected_due=None) -> dict:
     if result not in RESULTS:
         raise HTTPException(status_code=400, detail="只能选忘了、模糊或记得。")
+    if operation_id is not None and (not isinstance(operation_id, str) or not 1 <= len(operation_id) <= 100):
+        raise HTTPException(400, "评分编号不对。")
+    if progress_patch is not None and (not isinstance(progress_patch, dict) or not operation_id):
+        raise HTTPException(400, "缺少本次评分的进度或编号。")
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         expression = connection.execute(
             "SELECT * FROM expressions WHERE id = ?",
             (expression_id,),
@@ -565,6 +682,22 @@ def grade_review(expression_id: str, result: str) -> dict:
             "SELECT * FROM review_cards WHERE expression_id = ?",
             (expression_id,),
         ).fetchone()
+        prior = connection.execute(
+            "SELECT expression_id, result FROM review_log WHERE operation_id = ?", (operation_id,)
+        ).fetchone()
+        if prior:
+            if prior["expression_id"] != expression_id or prior["result"] != result:
+                raise HTTPException(409, "评分编号已被使用。")
+            saved = dict(card)
+            if progress_patch is not None:
+                lesson_id = expression["lesson_id"]
+                saved["progress"] = _progress_out(_progress_row(connection, lesson_id), lesson_id)
+            return saved
+        if expected_due is not None and (card is None or expected_due != card["due_at"]):
+            raise HTTPException(409, "这张卡已经在另一端复习过，请刷新。")
+        saved_progress = None
+        if progress_patch is not None:
+            saved_progress = _save_progress(connection, expression["lesson_id"], progress_patch)
         if card is None:
             now = iso()
             connection.execute(
@@ -591,17 +724,17 @@ def grade_review(expression_id: str, result: str) -> dict:
         )
         connection.execute(
             """
-            INSERT INTO review_log (expression_id, result, due_at, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO review_log (expression_id, result, due_at, created_at, operation_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (expression_id, result, due_at, now),
+            (expression_id, result, due_at, now, operation_id),
         )
         connection.commit()
         saved = connection.execute(
             "SELECT * FROM review_cards WHERE expression_id = ?",
             (expression_id,),
         ).fetchone()
-        return dict(saved)
+        return {**dict(saved), **({"progress": saved_progress} if saved_progress else {})}
 
 
 def due_cards() -> list[dict]:
@@ -668,6 +801,8 @@ def dialogue_state(lesson_id: str) -> dict:
 
 def show_dialogue_hint(lesson_id: str) -> dict:
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _lesson_row(connection, lesson_id)
         lines = _lines(connection, lesson_id)
         session = connection.execute(
             "SELECT * FROM dialogue_sessions WHERE lesson_id = ?",
@@ -680,22 +815,35 @@ def show_dialogue_hint(lesson_id: str) -> dict:
     return dialogue_state(lesson_id)
 
 
-def submit_order(lesson_id: str, text: str) -> dict:
+def submit_order(lesson_id: str, text: str, expected_revision=None) -> dict:
+    if not isinstance(text, str):
+        raise HTTPException(400, "请输入英文文本。")
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail=lesson_meta(lesson_id)["task"]["empty_error"])
     if len(text) > 500:
         raise HTTPException(status_code=400, detail="这句话太长了。")
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _lesson_row(connection, lesson_id)
         goals = _goals(connection, lesson_id)
         done = completed_goal_ids(text, goals)
         session = connection.execute(
             "SELECT * FROM dialogue_sessions WHERE lesson_id = ?",
             (lesson_id,),
         ).fetchone()
+        saved = None
+        if expected_revision is not None:
+            saved = _save_progress(connection, lesson_id, {
+                "expected_revision": expected_revision, "step": "talk",
+                "task_results": {goal["id"]: goal["id"] in done for goal in goals},
+            })
         _upsert_dialogue(connection, lesson_id, session, order_text=text, completed=done)
         connection.commit()
-    return dialogue_state(lesson_id)
+    response = dialogue_state(lesson_id)
+    if saved is not None:
+        response["progress"] = saved
+    return response
 
 
 def _upsert_dialogue(

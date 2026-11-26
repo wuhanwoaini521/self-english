@@ -6,6 +6,8 @@ import csv
 import json
 import re
 import sqlite3
+from contextlib import closing
+from tempfile import TemporaryDirectory
 import zipfile
 from pathlib import Path
 
@@ -406,9 +408,23 @@ def main() -> None:
     survival = json.loads(SURVIVAL.read_text(encoding="utf-8"))
     work = json.loads(WORK.read_text(encoding="utf-8"))
 
-    if DB.exists():
-        DB.unlink()
-    connection = sqlite3.connect(DB)
+    with TemporaryDirectory(dir=DB.parent, prefix=".catalog-") as folder:
+        staged = Path(folder) / "app.db"
+        with closing(sqlite3.connect(staged)) as connection:
+            write_catalog(connection, ready, survival, work, sentences)
+            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError("词库校验失败。")
+        staged.replace(DB)
+
+    spoken_hits = sum(1 for item in ready if item["spoken_rank"] is not None)
+    travel_n = sum(1 for item in ready if "travel" in item["books"].split())
+    business_n = sum(1 for item in ready if "business" in item["books"].split())
+    print(f"words {len(ready)} (spoken {spoken_hits}, travel {travel_n}, business {business_n}, no Chinese {missing})")
+    print(f"sentences travel {len(survival)} business {len(work)} reading {len(sentences)}")
+    print(f"database {DB}")
+
+
+def write_catalog(connection, ready, survival, work, sentences):
     connection.executescript(
         """
         CREATE TABLE words (
@@ -454,13 +470,6 @@ def main() -> None:
         sentences,
     )
     connection.commit()
-    connection.close()
-    spoken_hits = sum(1 for item in ready if item["spoken_rank"] is not None)
-    travel_n = sum(1 for item in ready if "travel" in item["books"].split())
-    business_n = sum(1 for item in ready if "business" in item["books"].split())
-    print(f"words {len(ready)} (spoken {spoken_hits}, travel {travel_n}, business {business_n}, no Chinese {missing})")
-    print(f"sentences travel {len(survival)} business {len(work)} reading {len(sentences)}")
-    print(f"database {DB}")
 
 
 if __name__ == "__main__":

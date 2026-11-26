@@ -3,7 +3,12 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
+
+from fastapi import HTTPException
 
 os.environ.setdefault("SELF_ENGLISH_LEARNING_DB", "")
 
@@ -38,6 +43,20 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(coffee["phonetic"], "/ˈkɔːfi/")
         self.assertIn("咖啡", coffee["note_zh"])
         self.assertTrue(coffee["example_en"])
+        payload = self.learning.lesson_payload(self.seed.LESSON_ID)
+        first = payload["dialogue"][0]
+        self.assertEqual(first["english"], "Hello. What would you like?")
+        self.assertEqual(first["marks"][0]["kind"], "grammar")
+        self.assertEqual(first["marks"][0]["headword"], "would you like")
+        latte = payload["passage"]["paragraphs"][0]
+        self.assertIn("latte", latte["english"])
+        kinds = {item["headword"]: item["kind"] for item in latte["marks"]}
+        self.assertEqual(kinds["latte"], "vocab")
+        self.assertEqual(kinds["I'd like"], "grammar")
+        self.assertEqual(
+            next(item for item in latte["marks"] if item["headword"] == "latte")["sense_zh"],
+            "拿铁咖啡",
+        )
 
     def test_vocab_phase_done_stays_on_vocab(self):
         saved = self.learning.save_progress(
@@ -135,6 +154,80 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(lesson, "咖啡店点餐")
 
+    def test_parallel_revision_and_revisit(self):
+        lesson = self.seed.LESSON_ID
+        def save(_):
+            try:
+                return self.learning.save_progress(lesson, {"expected_revision": 0, "step": "done"})["revision"]
+            except HTTPException as exc:
+                return exc.status_code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(sorted(pool.map(save, range(2))), [1, 409])
+        saved = self.learning.save_progress(lesson, {"expected_revision": 1, "step": "listen", "question_results": {"q": 1}})
+        self.assertEqual((saved["revision"], saved["step"], saved["question_results"]), (2, "done", {"q": 1}))
+        self.assertNotEqual(self.learning.today()["lesson_id"], lesson)
+
+    def test_v4_upgrade_preserves_progress(self):
+        lesson = self.seed.LESSON_ID
+        self.learning.save_progress(lesson, {"step": "talk", "vocab_index": 2})
+        with self.learning.connect() as db:
+            db.execute("ALTER TABLE lesson_progress DROP COLUMN revision")
+            db.execute("DROP INDEX review_operation")
+            db.execute("ALTER TABLE review_log DROP COLUMN operation_id")
+            db.execute("UPDATE schema_version SET version = 4")
+        self.learning.init()
+        saved = self.learning.lesson_payload(lesson)["progress"]
+        self.assertEqual((saved["step"], saved["vocab_index"], saved["revision"]), ("talk", 2, 1))
+
+    def test_retry_grade_and_progress_are_atomic(self):
+        lesson = self.seed.LESSON_ID
+        expression = lesson + ".coffee"
+        payload = {"expected_revision": 0, "vocab_index": 1, "vocab_phase": "recall"}
+        for _ in range(2):
+            saved = self.learning.grade_review(expression, "remembered", "same-action", payload)
+            self.assertEqual((saved["interval_days"], saved["progress"]["revision"]), (3, 1))
+        with self.assertRaises(HTTPException):
+            self.learning.grade_review(expression, "remembered", "stale", payload)
+        self.assertEqual(len(self.learning.review_log()), 1)
+        self.assertEqual(self.learning.lesson_payload(lesson)["progress"]["vocab_index"], 1)
+
+    def test_due_card_retry_across_devices(self):
+        expression = self.seed.LESSON_ID + ".coffee"
+        due = self.learning.add_review(expression)["due_at"]
+        for _ in range(2):
+            saved = self.learning.grade_review(expression, "remembered", "phone", expected_due=due)
+            self.assertEqual(saved["interval_days"], 3)
+        with self.assertRaises(HTTPException) as stale:
+            self.learning.grade_review(expression, "remembered", "desktop", expected_due=due)
+        self.assertEqual(stale.exception.status_code, 409)
+        self.assertEqual(len(self.learning.review_log()), 1)
+
+    def test_stale_dialogue_preserves_answer(self):
+        lesson = self.seed.LESSON_ID
+        original = "A coffee, please. Thank you."
+        self.learning.submit_order(lesson, original, 0)
+        with self.assertRaises(HTTPException) as stale:
+            self.learning.submit_order(lesson, "Water.", 0)
+        self.assertEqual(stale.exception.status_code, 409)
+        self.assertEqual(self.learning.dialogue_state(lesson)["order_text"], original)
+
+    def test_staged_catalog_failure_and_success(self):
+        from scripts import build_catalog as build
+        target = Path(self.tmp.name) / "app.db"
+        self.learning.add_review(self.seed.LESSON_ID + ".coffee")
+        with patch.object(build, "DB", target), patch.object(build, "load_spoken", return_value={}), \
+             patch.object(build, "load_cards", return_value=[]), patch.object(build, "load_gloss", return_value={}), \
+             patch.object(build, "load_tatoeba", return_value=[]):
+            build.main()
+            before = target.read_bytes()
+            with patch.object(build, "write_catalog", side_effect=RuntimeError("interrupted")), self.assertRaises(RuntimeError):
+                build.main()
+            self.assertEqual(target.read_bytes(), before)
+            build.main()
+        with closing(sqlite3.connect(target)) as db:
+            self.assertGreater(db.execute("SELECT count(*) FROM sentences").fetchone()[0], 0)
+        self.assertEqual(self.learning.progress_overview()["card_count"], 1)
+
     def test_today_starts_with_cafe(self):
         today = self.learning.today()
         self.assertEqual(today["lesson_id"], "cafe-order-a1")
@@ -195,6 +288,24 @@ class LearningDbTest(unittest.TestCase):
         self.assertEqual(boxes[2], 1)
         self.assertEqual(results["remembered"], 1)
         self.assertEqual(results["forgot"], 1)
+
+
+class MarkTest(unittest.TestCase):
+    def test_join_parts_keeps_sentence(self):
+        from app.seed import grammar, join_parts, vocab
+
+        english, marks = join_parts(
+            (
+                grammar("I'd like", phonetic="/aɪd laɪk/", pos="动词短语", sense_zh="我想要"),
+                " a ",
+                vocab("latte", phonetic="/ˈlɑː.teɪ/", pos="名词", sense_zh="拿铁咖啡"),
+                ", please.",
+            )
+        )
+        self.assertEqual(english, "I'd like a latte, please.")
+        self.assertEqual(marks[0]["kind"], "grammar")
+        self.assertEqual(marks[1]["kind"], "vocab")
+        self.assertEqual(english[marks[1]["start"] : marks[1]["end"]], "latte")
 
 
 class DialogueTest(unittest.TestCase):
