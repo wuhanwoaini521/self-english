@@ -18,70 +18,169 @@ from app.main import app
 from scripts.build_catalog import write_catalog
 
 
+def expect_pixel_book(page):
+    expect(page.locator(".study-deck")).to_be_visible()
+    assert "linear-gradient" in page.evaluate("getComputedStyle(document.body).backgroundImage")
+    colors = page.evaluate(r"""() => {
+      const values = [
+        getComputedStyle(document.body).backgroundImage,
+        getComputedStyle(document.querySelector('.study-deck > .card')).backgroundColor,
+        getComputedStyle(document.querySelector('.deck-arrow.next')).color,
+        getComputedStyle(document.querySelector('.tabbar')).backgroundColor,
+      ];
+      return values.flatMap(value => [...value.matchAll(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/g)]
+        .map(match => match.slice(1, 4).map(Number)));
+    }""")
+    assert colors
+    assert all(red == green == blue for red, green, blue in colors), colors
+    pixel_layers = page.evaluate("""() => ['::before', '::after'].map(pseudo =>
+      getComputedStyle(document.body, pseudo).backgroundImage)""")
+    assert any(value != "none" for value in pixel_layers)
+    layers = page.evaluate("""() => ['::before', '::after'].map(pseudo => {
+      const style = getComputedStyle(document.querySelector('.study-deck'), pseudo);
+      return {transform: style.transform, animation: style.animationName, transition: style.transitionDuration};
+    })""")
+    assert all(layer["transform"] != "none" for layer in layers)
+    top = page.locator(".study-deck > .card").evaluate("""el => ({
+      shadow: getComputedStyle(el).boxShadow,
+      filter: getComputedStyle(el).filter,
+    })""")
+    assert top["shadow"] != "none"
+    assert top["filter"] == "none"
+    arrows = page.locator(".study-deck .deck-arrow")
+    expect(arrows).to_have_count(2)
+    for arrow in [arrows.first, arrows.last]:
+        expect(arrow).to_be_visible()
+        box = arrow.bounding_box()
+        assert box["width"] >= 44 and box["height"] >= 44
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    return layers
+
+
 def exercise(browser, url):
     desktop = browser.new_context(viewport={"width": 1366, "height": 850})
     mobile = browser.new_context(viewport={"width": 393, "height": 852}, has_touch=True, is_mobile=True)
     pc, phone = desktop.new_page(), mobile.new_page()
+    first = "cet4-01-drop-course"
     for page in (pc, phone):
         page.route("https://fonts.**/*", lambda route: route.abort())
         page.goto(url + "/#/vocab")
-        expect(page.locator(".vocab-head")).to_contain_text("1/")
-    pc.get_by_role("button", name="下一页").click()
-    expect(pc.locator(".vocab-head")).to_contain_text("2/")
-    phone.get_by_role("button", name="下一页").click()
-    expect(phone.locator(".vocab-head")).to_contain_text("2/")
-    expect(phone.locator(".error")).to_have_count(0)
-    pc.get_by_role("button", name="下一页").click()
-    expect(pc.locator(".vocab-head")).to_contain_text("3/")
-    pc.get_by_role("button", name="下一页").click()
-    expect(pc.locator(".vocab-head")).to_contain_text("4/")
-    phone.get_by_role("button", name="下一页").click()
-    expect(phone.locator(".error")).to_contain_text("另一端")
-    expect(phone.locator(".vocab-head")).to_contain_text("4/")
+        expect(page.locator(".vocab-word")).to_be_visible()
+        expect(page.locator(".step-nav")).to_have_count(0)
+        expect_pixel_book(page)
 
-    touch = mobile.new_cdp_session(phone)
-    def swipe(selector):
-        box = phone.locator(selector).bounding_box()
-        x, y = box["x"] + box["width"] * .75, box["y"] + 12
-        for event, points in [("touchStart", [{"x": x, "y": y}]),
-                              ("touchMove", [{"x": x - 90, "y": y + 1}]), ("touchEnd", [])]:
-            touch.send("Input.dispatchTouchEvent", {"type": event, "touchPoints": points})
-    swipe(".study-deck")
-    expect(phone.locator(".vocab-head")).to_contain_text("5/")
-    expect(phone.locator(".error")).to_have_count(0)
-    pc.reload()
-    expect(pc.locator(".vocab-head")).to_contain_text("5/")
-    total = int(pc.locator(".vocab-head .kicker").inner_text().split("/")[-1])
-    for index in range(6, total + 1):
-        pc.locator(".study-deck").press("ArrowRight")
-        expect(pc.locator(".vocab-head")).to_contain_text(f"{index}/")
-    pc.get_by_role("button", name="去回忆这些词").click()
-    phone.reload()
-    expect(phone.locator(".recall-card.is-front")).to_be_visible()
-    swipe(".vocab-flip")
-    expect(phone.locator(".vocab-head")).to_contain_text("2/")
-    expect(phone.locator(".recall-card.is-front")).to_be_visible()
-    expect(phone.locator(".grade")).to_have_count(0)
-    pc.get_by_role("button", name="翻开看中文").click()
-    def lose_ack(route):
-        route.fetch()
-        route.abort()
-    pc.route("**/result", lose_ack, times=1)
-    pc.get_by_role("button", name="记得", exact=True).click()
-    expect(pc.locator(".error")).to_be_visible()
-    pc.get_by_role("button", name="记得", exact=True).click()
-    expect(pc.locator(".vocab-head")).to_contain_text("2/")
-    assert len(pc.request.get(url + "/api/review/log").json()["items"]) == 1
-
+    pc.goto(url + "/#/reading")
     phone.goto(url + "/#/reading")
-    expect(phone.locator(".passage-card")).to_be_visible()
-    phone.locator(".passage-card .mark").first.click()
-    expect(phone.locator(".gloss-card")).to_be_visible()
-    phone.keyboard.press("Escape")
-    swipe(".study-deck")
-    expect(phone.locator(".study-deck .kicker").first).to_contain_text("第 2")
-    expect(phone.locator(".quiz-card")).to_be_visible()
+    expect(pc.get_by_role("heading", name="长篇精读")).to_be_visible()
+    expect(pc.locator(".today-lesson-btn")).to_have_count(6)
+    expect(phone.locator(".today-lesson-btn")).to_have_count(6)
     assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    pc.locator(".today-lesson-btn").first.click()
+    phone.locator(".today-lesson-btn").first.click()
+    expect(pc.locator(".passage-card")).to_be_visible()
+    expect(pc.locator(".passage-card .passage-block")).to_have_count(1)
+    expect(pc.locator(".study-deck")).to_have_count(1)
+    expect(phone.locator(".passage-card")).to_be_visible()
+    expect(phone.locator(".passage-card .passage-block")).to_have_count(1)
+    assert pc.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    expect(pc.get_by_role("button", name="会", exact=True)).to_have_count(0)
+
+    pc_deck = pc.locator(".study-deck")
+    first_paragraph = pc.locator(".passage-block .sentence").inner_text()
+    expect(pc_deck).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    expect(pc_deck.locator(".deck-arrow.prev")).to_be_disabled()
+    pc_deck.locator(".deck-arrow.next").click()
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 2 页，共 3 页")
+    assert pc.locator(".passage-block .sentence").inner_text() != first_paragraph
+    pc.locator(".study-deck .deck-arrow.prev").click()
+    expect(pc.locator(".passage-block .sentence")).to_have_text(first_paragraph)
+
+    pc.locator(".study-deck").focus()
+    pc.keyboard.press("ArrowRight")
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 2 页，共 3 页")
+    pc.keyboard.press("ArrowLeft")
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    pc.locator(".study-deck .deck-arrow.next").click()
+    pc.locator(".study-deck .deck-arrow.next").click()
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 3 页，共 3 页")
+    expect(pc.locator(".study-deck .deck-arrow.next")).to_be_disabled()
+    pc.locator(".study-deck .deck-arrow.prev").click()
+    pc.locator(".study-deck .deck-arrow.prev").click()
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+
+    pc.locator(".passage-card .speak").click()
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    before = pc.locator(".passage-card .mark").count()
+    assert before >= 1
+    pc.locator(".passage-card .mark").first.click()
+    expect(pc.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    expect(pc.locator(".gloss-card")).to_be_visible()
+    expect(pc.get_by_role("button", name="会", exact=True)).to_be_visible()
+    expect(pc.get_by_role("button", name="不会", exact=True)).to_have_count(0)
+    held_refresh = {}
+    def hold_article_refresh(route):
+        held_refresh["route"] = route
+    pc.route(f"**/api/readings/{first}", hold_article_refresh)
+    pc.locator(".passage-card").evaluate("el => window.stablePassageBeforeMark = el")
+    with pc.expect_request(f"**/api/readings/{first}"):
+        pc.get_by_role("button", name="会", exact=True).click()
+    expect(pc.locator(".gloss-card")).to_have_count(0)
+    try:
+        assert pc.evaluate("document.querySelector('.passage-card') === window.stablePassageBeforeMark")
+        expect(pc.locator(".loading")).to_have_count(0)
+    finally:
+        held_refresh["route"].continue_()
+    pc.unroute(f"**/api/readings/{first}")
+    pc.wait_for_function(f"document.querySelectorAll('.passage-card .mark').length < {before}")
+    assert pc.evaluate("document.querySelector('.passage-card') === window.stablePassageBeforeMark")
+    after = pc.locator(".passage-card .mark").count()
+    assert after < before
+
+    phone_deck = phone.locator(".study-deck")
+    phone_deck.evaluate("""deck => {
+      const start = {bubbles: true, isPrimary: true, pointerId: 7, pointerType: 'touch', button: 0, buttons: 1, clientX: 200, clientY: 200};
+      deck.dispatchEvent(new PointerEvent('pointerdown', start));
+      deck.dispatchEvent(new PointerEvent('pointerup', {...start, buttons: 0, clientY: 320}));
+    }""")
+    expect(phone.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    phone_deck.evaluate("""deck => {
+      const start = {bubbles: true, isPrimary: true, pointerId: 8, pointerType: 'touch', button: 0, buttons: 1, clientX: 200, clientY: 200};
+      deck.dispatchEvent(new PointerEvent('pointerdown', start));
+      deck.dispatchEvent(new PointerEvent('pointerup', {...start, buttons: 0, clientX: 80}));
+    }""")
+    expect(phone.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 2 页，共 3 页")
+    phone.locator(".study-deck .deck-arrow.prev").click()
+    expect(phone.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    phone.locator(".study-deck .deck-arrow.next").scroll_into_view_if_needed()
+    assert phone.evaluate("scrollY") > 0
+    phone.locator(".study-deck .deck-arrow.next").click()
+    expect(phone.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 2 页，共 3 页")
+    phone.wait_for_function("""() => {
+      const rect = document.querySelector('.passage-block').getBoundingClientRect();
+      return rect.top >= 0 && rect.top < innerHeight;
+    }""")
+    phone.locator(".study-deck .deck-arrow.prev").click()
+    expect(phone.locator(".study-deck")).to_have_attribute("aria-label", "阅读，第 1 页，共 3 页")
+    phone.reload()
+    expect(phone.locator(".passage-card .mark")).to_have_count(after)
+
+    phone.goto(url + "/#/vocab")
+    expect(phone.locator(".vocab-word")).to_be_visible()
+    pc.goto(url + "/#/vocab")
+    expect(pc.locator(".vocab-word")).to_be_visible()
+    expect(pc.locator(".vocab-grades .gloss-mark-btn")).to_contain_text("会")
+    pc.emulate_media(reduced_motion="reduce")
+    reduced_layers = pc.evaluate("""() => ['::before', '::after'].map(pseudo => {
+      const style = getComputedStyle(document.querySelector('.study-deck'), pseudo);
+      return {animation: style.animationName, transition: style.transitionDuration};
+    })""")
+    assert all(layer["animation"] == "none" and layer["transition"] == "0s" for layer in reduced_layers)
+    pc.locator(".study-deck .deck-arrow.next").click()
+    assert "第 2 页" in pc.locator(".study-deck").get_attribute("aria-label")
+    pc.locator(".study-deck .deck-arrow.prev").click()
+    pc.emulate_media(reduced_motion="no-preference")
 
     pc.goto(url + "/#/vocab/library")
     search = pc.get_by_placeholder("搜英文或中文")
@@ -100,19 +199,23 @@ def exercise(browser, url):
     for label, sample in [("商务", "work"), ("阅读", "read")]:
         pc.locator("#view").get_by_role("button", name=label, exact=True).click()
         expect(pc.locator(".list .english").first).to_have_text(sample)
+
     for name in ("talk", "progress", "today"):
         phone.goto(url + "/#/" + name)
         expect(phone.locator("#view .card").first).to_be_visible()
         assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        expect(phone.locator(".step-nav")).to_have_count(0)
+
     phone.goto(url + "/#/talk")
-    phone.locator("#talk-input").fill("Excuse me. Is this your phone? Thank you.")
+    expect(phone.get_by_role("heading", name="选一个话题")).to_be_visible()
+    phone.locator(".today-lesson-btn").first.click()
+    phone.locator("#talk-input").fill("I will drop the course before the deadline because the workload is too heavy.")
     phone.locator(".talk-actions .primary").click()
     expect(phone.locator(".talk-ok")).to_be_visible()
-    phone.get_by_role("button", name="去做复盘", exact=True).click()
-    phone.get_by_role("button", name="完成本课，接着下一课").click()
-    expect(phone.locator(".today-task")).to_contain_text("不是我的")
+
     pc.goto(url + "/#/today")
-    expect(pc.locator(".today-task")).to_contain_text("不是我的")
+    expect(pc.locator(".today-task")).to_contain_text("这门选修该不该退")
+    expect(pc.locator(".today-task .primary")).to_contain_text("阅读")
     for selector in (".today-task h1", ".today-task .audio-tag", ".today-task .primary"):
         ratio = pc.locator(selector).first.evaluate("""el => {
           function luminance(color) {
@@ -126,11 +229,14 @@ def exercise(browser, url):
           return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
         }""")
         assert ratio >= 4.5, (selector, ratio)
-    pc.locator(".today-lesson-btn.is-done").first.click()
-    pc.locator(".step-nav").get_by_role("button", name="听读").click()
+
+    pc.goto(url + f"/#/reading/{first}")
+    expect(pc.locator(".quiz-card")).to_be_visible()
     pc.locator(".choice").first.click()
     expect(pc.locator(".choice.is-on")).to_be_visible()
-    assert pc.request.get(url + "/api/today").json()["lesson_id"] == "book1-02-not-mine"
+    pc.get_by_role("button", name="读完了", exact=True).click()
+    expect(pc.get_by_role("button", name="已经读完", exact=True)).to_be_visible()
+    assert pc.request.get(url + "/api/today").json()["lesson_id"] != first
     desktop.close()
     mobile.close()
 
@@ -158,7 +264,7 @@ def main():
                     browser.close()
             finally:
                 server.should_exit = True
-                thread.join(10)
+                thread.join(timeout=2)
 
 
 if __name__ == "__main__":

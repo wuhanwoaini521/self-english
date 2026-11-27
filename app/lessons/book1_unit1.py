@@ -15,7 +15,39 @@ BOOK1_NOTE = (
 )
 
 
-def _gnote(*lines: str) -> str:
+def _teach(
+    *,
+    ask: str = "怎么问",
+    ask_en: str = "",
+    ask_zh: str = "",
+    replies: tuple[tuple[str, str], ...] = (),
+    swaps: tuple[tuple[str, str], ...] = (),
+    why_title: str = "",
+    why_lines: tuple[str, ...] = (),
+) -> dict:
+    return {
+        "ask": ask,
+        "ask_en": ask_en,
+        "ask_zh": ask_zh,
+        "replies": [{"zh": zh, "en": en} for zh, en in replies],
+        "swaps": [{"zh": zh, "en": en} for zh, en in swaps],
+        "why_title": why_title,
+        "why_lines": list(why_lines),
+    }
+
+
+def _note_from_teach(teach: dict) -> str:
+    lines: list[str] = []
+    if teach.get("ask"):
+        lines.append(teach["ask"])
+    for item in teach.get("replies") or []:
+        lines.append(f"{item['zh']}　{item['en']}")
+    swaps = teach.get("swaps") or []
+    if swaps:
+        lines.append(" ".join(f"{item['zh']} {item['en']}" for item in swaps))
+    if teach.get("why_title"):
+        lines.append(teach["why_title"])
+    lines.extend(teach.get("why_lines") or [])
     return "\n".join(lines)
 
 
@@ -35,7 +67,7 @@ def _gexpr(
     chinese: str,
     *,
     phonetic: str,
-    note_zh: str,
+    teach: dict,
     example_en: str,
     example_zh: str,
     mark: str = "📘",
@@ -46,10 +78,11 @@ def _gexpr(
         chinese,
         kind="grammar",
         phonetic=phonetic,
-        note_zh=note_zh,
+        note_zh=_note_from_teach(teach),
         example_en=example_en,
         example_zh=example_zh,
         mark=mark,
+        teach=teach,
     )
 
 
@@ -95,14 +128,17 @@ LESSON_01 = _lesson(
             "Is this your …?",
             "这是你的……吗？",
             phonetic="/ɪz ðɪs jɔːr/",
-            note_zh=_gnote(
-                "句型：Is this your + 名词？",
-                "肯定：Yes, it is.",
-                "否定：No, it isn’t.",
-                "变化：把 is 放到句首，句尾用问号。",
-                "对比：This is my phone. 是陈述；Is this your phone? 才是提问。",
-                "常见错：不要说 This is your phone? 也不要说 Is this phone your?",
-                "替换：phone / bag / key / ticket",
+            teach=_teach(
+                ask="怎么问",
+                ask_en="Is this your {en}?",
+                ask_zh="这是你的{zh}吗？",
+                replies=(("是", "Yes, it is."), ("不是", "No, it isn’t.")),
+                swaps=(("手机", "phone"), ("包", "bag"), ("钥匙", "key"), ("票", "ticket")),
+                why_title="为什么把 is 放前面？",
+                why_lines=(
+                    "陈述是 This is your phone. 提问时把 is 放到句首，句尾用问号。",
+                    "不要说 This is your phone? 也不要说 Is this phone your?",
+                ),
             ),
             example_en="Is this your phone?",
             example_zh="这是你的手机吗？",
@@ -206,25 +242,27 @@ LESSON_01 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "桌上的手机",
         "paragraphs": [
             _para(
-                "我在咖啡馆。桌上有一部手机。",
-                "I am at a cafe. There is a ",
+                "我在咖啡馆。邻桌坐着一个男人。桌上有一部黑色的手机。我看着这部手机。",
+                "I am at a cafe. A man is at the next table. There is a black ",
                 vocab("phone", phonetic="/foʊn/", pos="名词", sense_zh="手机"),
-                " on the table.",
+                " on the table. I look at the phone.",
             ),
             _para(
-                "我说：对不起，打扰一下。这是你的手机吗？",
+                "我不知道这是不是他的。我看着那个男人。我说：「对不起，打扰一下。这是你的手机吗？」",
+                "I do not know. Is this his phone? I look at the man. I say, ",
                 vocab("Excuse me", phonetic="/ɪkˈskjuːz miː/", pos="短语", sense_zh="对不起，打扰一下"),
                 ". ",
                 grammar("Is this your", phonetic="/ɪz ðɪs jɔːr/", pos="疑问句", sense_zh="这是你的……吗"),
                 " phone?",
             ),
             _para(
-                "他说：是的。谢谢。",
+                "男人看了看那部手机。他说：「是的。谢谢。」这是他的手机。我很高兴。",
+                "The man looks at the phone. He says, ",
                 grammar("Yes, it is", phonetic="/jes ɪt ɪz/", pos="回答", sense_zh="是的"),
-                ". Thank you.",
+                ". Thank you. It is his phone. I am happy.",
             ),
         ],
     },
@@ -295,13 +333,17 @@ LESSON_02 = _lesson(
             "It isn’t …",
             "它不是……",
             phonetic="/ɪt ˈɪznt/",
-            note_zh=_gnote(
-                "句型：It isn’t + my/your/her + 名词。",
-                "完整否定：It is not. 口语缩成 It isn’t.",
-                "肯定：It is my coat. / It’s my coat.",
-                "对比：Is this your coat? / No, it isn’t.",
-                "常见错：不要说 It not is my coat.",
-                "替换：coat / bag / umbrella / ticket",
+            teach=_teach(
+                ask="怎么说",
+                ask_en="It isn’t my {en}.",
+                ask_zh="这不是我的{zh}。",
+                replies=(("不是我的", "It isn’t my coat."), ("是我的", "It’s my coat.")),
+                swaps=(("外套", "coat"), ("包", "bag"), ("伞", "umbrella"), ("票", "ticket")),
+                why_title="isn’t 是什么？",
+                why_lines=(
+                    "It is not 口语里缩成 It isn’t.",
+                    "不要说 It not is my coat.",
+                ),
             ),
             example_en="It isn’t my coat.",
             example_zh="这不是我的外套。",
@@ -404,27 +446,27 @@ LESSON_02 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "不是我的外套",
         "paragraphs": [
             _para(
-                "店员拿来一件外套。这不是我的外套。",
-                "The clerk has a ",
+                "我在商店里。店员拿来一件棕色外套。她问：「这是你的外套吗？」我看了看。",
+                "I am in a shop. The clerk has a brown ",
                 vocab("coat", phonetic="/koʊt/", pos="名词", sense_zh="外套"),
-                ". ",
-                grammar("It isn't", phonetic="/ɪt ˈɪznt/", pos="否定句", sense_zh="它不是"),
-                " my coat.",
+                ". She asks, Is this your coat? I look at it.",
             ),
             _para(
-                "我说对不起。这是她的外套。",
-                "I say sorry. ",
+                "我说：「不是。这不是我的外套。」旁边站着一位女士。这是她的棕色外套。",
+                "I say, No. ",
+                grammar("It isn't", phonetic="/ɪt ˈɪznt/", pos="否定句", sense_zh="它不是"),
+                " my coat. A woman is standing next to me. ",
                 grammar("It's", phonetic="/ɪts/", pos="缩写", sense_zh="它是"),
                 " ",
                 vocab("her", phonetic="/hɜːr/", pos="形容词", sense_zh="她的"),
-                " coat.",
+                " brown coat.",
             ),
             _para(
-                "店员把外套给她。她说谢谢。",
-                "The clerk gives her the coat. She says thank you.",
+                "我说对不起。店员把外套给她。她说谢谢。我们都笑了。",
+                "I say sorry to her. The clerk gives her the coat. She says thank you. We all smile.",
             ),
         ],
     },
@@ -487,13 +529,17 @@ LESSON_03 = _lesson(
             "This is …",
             "这是……（用来介绍人）",
             phonetic="/ðɪs ɪz/",
-            note_zh=_gnote(
-                "句型：This is + 名字 / a + 身份。",
-                "介绍人：This is Lin. This is my friend.",
-                "介绍物：This is a ticket.",
-                "冠词：a teacher, an engineer。元音音素前用 an。",
-                "对比：He is a teacher. 说身份；This is Lin. 作介绍。",
-                "常见错：不要说 This Lin. 也不要 This is teacher.",
+            teach=_teach(
+                ask="怎么说",
+                ask_en="This is my {en}.",
+                ask_zh="这是我的{zh}。",
+                replies=(("介绍人", "This is Lin."), ("介绍物", "This is a ticket.")),
+                swaps=(("朋友", "friend"), ("老师", "teacher"), ("票", "ticket")),
+                why_title="为什么要说 This is？",
+                why_lines=(
+                    "介绍人用 This is Lin. 说身份用 He is a teacher.",
+                    "不要说 This Lin. 也不要 This is teacher. 元音音素前用 an：an engineer.",
+                ),
             ),
             example_en="This is my friend. She is an engineer.",
             example_zh="这是我的朋友。她是工程师。",
@@ -594,25 +640,25 @@ LESSON_03 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "我的朋友 Lin",
         "paragraphs": [
             _para(
-                "今天我介绍一位朋友。这是 Lin。",
-                "Today I introduce a friend. ",
+                "今天我和朋友 Lin 在前台。我想把她介绍给 Sam。我说：「这是 Lin。」",
+                "Today I am at the desk with my friend Lin. I want to introduce her. I say, ",
                 grammar("This is", phonetic="/ðɪs ɪz/", pos="句型", sense_zh="这是（介绍）"),
                 " Lin.",
             ),
             _para(
-                "她是工程师。很高兴认识你。",
-                "She is ",
+                "Lin 是工程师，不是老师。我说：「她是工程师。很高兴认识你。」",
+                "Lin is not a teacher. She is ",
                 grammar("an", phonetic="/æn/", pos="冠词", sense_zh="一个（元音前）"),
                 " ",
                 vocab("engineer", phonetic="/ˌendʒɪˈnɪr/", pos="名词", sense_zh="工程师"),
-                ". Nice to meet you.",
+                ". I say, She is an engineer. Nice to meet you.",
             ),
             _para(
-                "Sam 说欢迎。这是一张通行证。",
-                "Sam says welcome. This is a pass.",
+                "Sam 看着 Lin。他说欢迎。他拿出一张通行证。这是给 Lin 的通行证。",
+                "Sam looks at Lin. He says welcome. He has a pass. This is a pass for Lin today.",
             ),
         ],
     },
@@ -679,16 +725,20 @@ LESSON_04 = _lesson(
             "Are you a …?",
             "你是……吗？",
             phonetic="/ɑːr juː ə/",
-            note_zh=_gnote(
-                "句型：Are you + a/an + 职业？",
-                "肯定：Yes, I am. 否定：No, I'm not.",
-                "特殊疑问：What's your job? I'm a nurse.",
-                "be 的人称：I am / you are / he is / she is.",
-                "常见错：不要说 Are you teacher? 也不要 Yes, I'm.",
-                "替换：teacher / nurse / student / driver",
+            teach=_teach(
+                ask="怎么问",
+                ask_en="Are you a {en}?",
+                ask_zh="你是{zh}吗？",
+                replies=(("是", "Yes, I am."), ("不是", "No, I'm not.")),
+                swaps=(("老师", "teacher"), ("护士", "nurse"), ("学生", "student"), ("司机", "driver")),
+                why_title="为什么不能说 Yes, I'm?",
+                why_lines=(
+                    "简短回答要用完整的 am：Yes, I am. 不要 Yes, I'm.",
+                    "职业前要有 a：Are you a teacher? 不要 Are you teacher?",
+                ),
             ),
-            example_en="Are you a teacher? No, I'm not. I'm a nurse.",
-            example_zh="你是老师吗？不是。我是护士。",
+            example_en="Are you a teacher?",
+            example_zh="你是老师吗？",
         ),
         _vexpr(
             "job",
@@ -786,23 +836,23 @@ LESSON_04 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "我是护士",
         "paragraphs": [
             _para(
-                "Sam 问：你是老师吗？",
-                "Sam asks, ",
+                "我在大厅里。Sam 看着我。他问：「你是老师吗？」我不是老师。",
+                "I am in a hall. Sam looks at me. He asks, ",
                 grammar("Are you", phonetic="/ɑːr juː/", pos="疑问句", sense_zh="你是……吗"),
-                " a teacher?",
+                " a teacher? I am not a teacher.",
             ),
             _para(
-                "我说不是。我是护士。",
-                "I say no. ",
+                "我说：「不是。我不是老师。」我是护士。我说：「我是护士。」",
+                "I say, No, I'm not. I am not a teacher. I am a nurse. I say, ",
                 grammar("I'm", phonetic="/aɪm/", pos="缩写", sense_zh="我是"),
                 " a nurse.",
             ),
             _para(
-                "他问：你做什么工作？我还是回答：我是护士。",
-                "He asks, What's your job? I say, I'm a nurse.",
+                "他又问：「你做什么工作？」我再说一遍：「我是护士。」他说很高兴认识我。",
+                "He asks, What's your job? I say it again. I'm a nurse. He says, Nice to meet you.",
             ),
         ],
     },
@@ -873,15 +923,17 @@ LESSON_05 = _lesson(
             "How are you?",
             "你好吗？",
             phonetic="/haʊ ɑːr juː/",
-            note_zh=_gnote(
-                "句型：How are you (today)?",
-                "常用答：I'm fine, thank you. And you?",
-                "形容词作表语：I'm tired. She's happy. He's busy.",
-                "对比：How are you? 问状态；What's your job? 问身份。",
-                "常见错：不要答 Yes. 也不要 I'm fine too 代替 And you?",
+            teach=_teach(
+                ask="怎么问",
+                replies=(("很好", "I'm fine, thank you."), ("有点累", "I'm tired.")),
+                why_title="为什么不能只回 Yes?",
+                why_lines=(
+                    "How are you? 问的是状态，不是是非题。",
+                    "答完可以回问 And you? 不要用 I'm fine too 代替。",
+                ),
             ),
-            example_en="How are you today? I'm fine, thank you.",
-            example_zh="你今天好吗？我很好，谢谢。",
+            example_en="How are you today?",
+            example_zh="你今天好吗？",
         ),
         _vexpr(
             "today",
@@ -977,23 +1029,23 @@ LESSON_05 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "今天好吗",
         "paragraphs": [
             _para(
-                "走廊里，Sam 问我今天好吗。",
-                "In the hall, Sam asks, ",
+                "早上我在走廊里。Sam 看见我。他走过来。他问：「你今天好吗？」",
+                "It is morning now. I am in the hall. Sam sees me. He asks, ",
                 grammar("How are you", phonetic="/haʊ ɑːr juː/", pos="疑问句", sense_zh="你（近况）好吗"),
                 " today?",
             ),
             _para(
-                "我说我很好，谢谢。你呢？",
-                "I say, ",
+                "我很好。我说：「我很好，谢谢。你呢？」他也很好，但是有点累。",
+                "I am fine. I say, ",
                 grammar("I'm fine", phonetic="/aɪm faɪn/", pos="表语", sense_zh="我很好"),
-                ", thank you. And you?",
+                ", thank you. And you? He is fine too, but he is tired.",
             ),
             _para(
-                "他也很好，但有点累。天气很好。",
-                "He is fine too, but he is tired. It's a fine day.",
+                "我看向窗户。窗户是开着的。今天天气很好。我们都还好。",
+                "I look at the open window. It is open. It is a fine day today. We are OK.",
             ),
         ],
     },
@@ -1068,12 +1120,17 @@ LESSON_06 = _lesson(
             "Whose … is this?",
             "这是谁的……？",
             phonetic="/huːz/",
-            note_zh=_gnote(
-                "句型：Whose + 名词 + is this? 或 Whose is this?",
-                "回答：It's my bag. / It's mine.",
-                "物主形容词：my / your / his / her / our / their，后面必须加名词。",
-                "对比：Who is this? 问人；Whose is this? 问所属。",
-                "常见错：Whose bag this is? 语序错。Whose 和 Who's 不是同一个词。",
+            teach=_teach(
+                ask="怎么问",
+                ask_en="Whose {en} is this?",
+                ask_zh="这是谁的{zh}？",
+                replies=(("我的", "It's mine."), ("他的", "It's his bag.")),
+                swaps=(("包", "bag"), ("钥匙", "key"), ("外套", "coat"), ("票", "ticket")),
+                why_title="whose 和 who's 有什么不同？",
+                why_lines=(
+                    "Whose 问所属。Who's = who is，问人。",
+                    "不要说 Whose bag this is?",
+                ),
             ),
             example_en="Whose bag is this? It's his bag.",
             example_zh="这是谁的包？这是他的包。",
@@ -1173,21 +1230,21 @@ LESSON_06 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "谁的包",
         "paragraphs": [
             _para(
-                "健身房里有一个包。这是谁的包？",
-                "There is a bag at the gym. ",
+                "我在健身房。地上有一个包。我看着这个包。这是谁的包？",
+                "I am at the gym. There is a bag on the floor. I look at the bag. ",
                 grammar("Whose", phonetic="/huːz/", pos="疑问词", sense_zh="谁的"),
                 " bag is this?",
             ),
             _para(
-                "教练说：这是他的包。那把钥匙是她的。",
-                "The coach says, It's his bag. That key is her key.",
+                "教练也看着这个包。他说：「这是他的包。」旁边还有一把钥匙。那把钥匙是她的。",
+                "The coach looks at the bag too. He says, It's his bag. A key is next to it. That key is her key.",
             ),
             _para(
-                "这些是我们的包。我的包是蓝色的。",
-                "These are our bags. My bag is blue.",
+                "这些是我们的包。我的包是蓝色的。他的包是黑色的。我们拿起自己的包。",
+                "These are our bags. My bag is blue. His bag is black. We take our bags with us.",
             ),
         ],
     },
@@ -1254,15 +1311,20 @@ LESSON_07 = _lesson(
             "What colour is it?",
             "它是什么颜色？",
             phonetic="/wɒt ˈkʌlər ɪz ɪt/",
-            note_zh=_gnote(
-                "句型：What colour is + 名词 / it?",
-                "回答：It's red. 颜色是形容词，前面不加 a。",
-                "祈使句：Come here. Look at this. 用动词原形，通常不说 you。",
-                "对比：What is it? 问东西；What colour is it? 问颜色。",
-                "常见错：It's a red. 应为 It's red. 或 It's a red cup.",
+            teach=_teach(
+                ask="怎么问",
+                ask_en="What colour is this {en}?",
+                ask_zh="这个{zh}是什么颜色？",
+                replies=(("红色", "It's red."), ("蓝色", "It's blue.")),
+                swaps=(("杯子", "cup"), ("包", "bag"), ("票", "ticket")),
+                why_title="为什么不说 It's a red?",
+                why_lines=(
+                    "颜色是形容词，说 It's red. 不是 It's a red.",
+                    "问东西用 What is it? 问颜色用 What colour is it?",
+                ),
             ),
-            example_en="What colour is it? It's blue. Come here.",
-            example_zh="它是什么颜色？是蓝色。过来。",
+            example_en="What colour is it?",
+            example_zh="它是什么颜色？",
         ),
         _vexpr(
             "colour",
@@ -1359,20 +1421,20 @@ LESSON_07 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "红杯子和蓝杯子",
         "paragraphs": [
             _para(
-                "商店里有两只杯子。过来看。",
-                "There are two cups in the shop. Come here and look.",
+                "我在商店里。桌上有两只杯子。一只离我很近。过来看一看。",
+                "I am in a shop. There are two cups on the table. One cup is near me. Come here and look.",
             ),
             _para(
-                "这只杯子是什么颜色？它是红色的。",
+                "这只杯子是什么颜色？它是红色的。那一只是蓝色的。我两只都看了看。",
                 grammar("What colour is", phonetic="/wɒt ˈkʌlər ɪz/", pos="疑问句", sense_zh="是什么颜色"),
-                " this cup? It's red.",
+                " this cup? It is red. That one is blue. I look at both cups now.",
             ),
             _para(
-                "那一只是蓝色的。我要红杯子。",
-                "That one is blue. I want the red cup.",
+                "我要红杯子。我不要蓝的那一只。我说：「看这个。」店员把红杯子给我。",
+                "I want the red cup. I do not want the blue one. I say, Look at this. The clerk gives me the red cup.",
             ),
         ],
     },
@@ -1439,12 +1501,17 @@ LESSON_08 = _lesson(
             "We are …",
             "我们是……",
             phonetic="/wi ɑːr/",
-            note_zh=_gnote(
-                "句型：We are + 国籍 / 身份。They're = They are.",
-                "国籍：I'm Chinese. We're Chinese. He's American.",
-                "复数：one passport, two passports。规则复数加 -s。",
-                "问句：Are you Chinese? Are they tourists?",
-                "常见错：We is Chinese. They is tourists.",
+            teach=_teach(
+                ask="怎么说",
+                ask_en="We are {en}.",
+                ask_zh="我们是{zh}。",
+                replies=(("我们", "We are Chinese."), ("他们", "They're tourists.")),
+                swaps=(("中国人", "Chinese"), ("游客", "tourists")),
+                why_title="为什么不用 is？",
+                why_lines=(
+                    "We / They 后面用 are. 不要 We is Chinese.",
+                    "国籍不加 a：I'm Chinese.",
+                ),
             ),
             example_en="We are Chinese. We are tourists.",
             example_zh="我们是中国人。我们是游客。",
@@ -1545,20 +1612,20 @@ LESSON_08 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "我们的护照",
         "paragraphs": [
             _para(
-                "前台说：请出示护照。你们是中国人吗？",
-                "The clerk says, Your passports, please. Are you Chinese?",
+                "我们在前台。店员看着我们。她说：「请出示护照。你们是中国人吗？」",
+                "We are at the desk. The clerk looks at us. She says, Your passports, please. Are you Chinese?",
             ),
             _para(
-                "我们是中国人。我们是游客。",
+                "我们是中国人。我们今天是来自中国的游客。我说：「我们是中国人。我们也是游客。」",
                 grammar("We are", phonetic="/wi ɑːr/", pos="句型", sense_zh="我们是"),
-                " Chinese. We are tourists.",
+                " Chinese. We are tourists from China today. I say, We are Chinese. We are tourists too.",
             ),
             _para(
-                "他们也是游客。这些是我们的护照。",
-                "They are tourists too. These are our passports.",
+                "他们也是游客。这些是我们的护照。我们把护照交给店员。",
+                "They are tourists too. These are our passports. We give the passports to the clerk. She looks at them.",
             ),
         ],
     },
@@ -1621,12 +1688,17 @@ LESSON_09 = _lesson(
             "There is …",
             "有……（某处存在）",
             phonetic="/ðer ɪz/",
-            note_zh=_gnote(
-                "句型：There is + 单数。There's a shop.",
-                "复数下一单元才系统练 There are。本课先站稳单数。",
-                "疑问：Is there a shop? 否定：There isn't a shop.",
-                "对比：It is a shop. 说「它是」；There is a shop. 说「存在」。",
-                "常见错：Has a shop. / Is a shop here.",
+            teach=_teach(
+                ask="怎么说",
+                ask_en="There is a {en}.",
+                ask_zh="有一个{zh}。",
+                replies=(("有", "There is a shop."), ("没有", "There isn't a shop.")),
+                swaps=(("店", "shop"), ("椅子", "chair")),
+                why_title="There is 和 It is 有什么不同？",
+                why_lines=(
+                    "It is a shop. 说「它是」。There is a shop. 说「有、存在」。",
+                    "不要说 Has a shop. 复数 There are 下一单元再练。",
+                ),
             ),
             example_en="There is a shop. Is there a water machine?",
             example_zh="有一家店。有没有饮水机？",
@@ -1725,21 +1797,21 @@ LESSON_09 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "楼下有一家店",
         "paragraphs": [
             _para(
-                "我们在等候室。我们又累又渴。",
-                "We are in the waiting room. We are tired and thirsty.",
+                "我们在等候室。我们很累。我们也渴了。我们想喝一点凉水。",
+                "We are in the waiting room. We are tired. We are thirsty too. We want some cold water.",
             ),
             _para(
-                "这里有店吗？有。楼下有一家店。",
+                "这里有店吗？有。楼下有一家店。角落里也有一台饮水机。",
                 "Is there a shop? Yes. ",
                 grammar("There is", phonetic="/ðer ɪz/", pos="存在句", sense_zh="有"),
-                " a shop downstairs.",
+                " a shop downstairs. There is a water machine in the corner too.",
             ),
             _para(
-                "角落里有一台饮水机。我们去喝水。",
-                "There is a water machine in the corner. We go and drink water.",
+                "我们下楼。我们喝了一些凉水。然后我们坐下。现在我们不渴了。",
+                "We go downstairs now. We drink some cold water. Then we sit down. We are not thirsty now.",
             ),
         ],
     },
@@ -1806,12 +1878,17 @@ LESSON_10 = _lesson(
             "Give me …",
             "给我……",
             phonetic="/ɡɪv miː/",
-            note_zh=_gnote(
-                "句型：Give me + 名词。Give him/her/us/them + 名词。",
-                "Which + 名词：Which book? Which one?",
-                "This one / that one 用来代替名词。",
-                "对比：Give me the book. 是祈使句，不是疑问句。",
-                "常见错：Give the book me. 间接宾语 me 应靠近动词。",
+            teach=_teach(
+                ask="怎么说",
+                ask_en="Give me that {en}, please.",
+                ask_zh="请把那个{zh}给我。",
+                replies=(("这个", "Give me this one."), ("那个", "Give me that one.")),
+                swaps=(("书", "book"), ("杯子", "cup")),
+                why_title="为什么 me 要靠近动词？",
+                why_lines=(
+                    "Give me the book. 不要 Give the book me.",
+                    "这是祈使句，不是疑问句。",
+                ),
             ),
             example_en="Which book? Give me that one, please.",
             example_zh="哪一本？请把那本给我。",
@@ -1909,20 +1986,21 @@ LESSON_10 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "那一本书",
         "paragraphs": [
             _para(
-                "书店里有两本书。你要哪一本？",
-                "There are two books in the shop. Which book do you want?",
+                "我在书店里。桌上有两本书。一本离我很近。一本在那边。",
+                "I am in a book shop. There are two books on the table. One book is near me. One book is over there.",
             ),
             _para(
-                "请把那一本给我。不要这一本。",
+                "我要哪一本？我要那一本。我不要这一本。我说：「请把那一本给我。」",
+                "Which book do I want? I want that one. I do not want this one. I say, ",
                 grammar("Give me", phonetic="/ɡɪv miː/", pos="祈使句", sense_zh="给我"),
-                " that one. Not this one.",
+                " that one.",
             ),
             _para(
-                "那本蓝的。给你。谢谢。",
-                "The blue one. Here you are. Thank you.",
+                "店员拿起那本蓝的。她说：「给你。」我说谢谢。我拿着那本书。",
+                "The clerk takes the blue book. She says, Here you are. I say thank you. I have the book.",
             ),
         ],
     },
@@ -1989,12 +2067,17 @@ LESSON_11 = _lesson(
             "some + 复数",
             "一些",
             phonetic="/səm/",
-            note_zh=_gnote(
-                "句型：Give me some + 复数名词。Give me some cups.",
-                "some 用于肯定句，表示不确定的几个。",
-                "Which glasses? 面前有好几副时用 which。",
-                "对比：a cup 一只；some cups 几只；the cups 那些确定的。",
-                "常见错：Give me some cup. 可数名词要用复数。",
+            teach=_teach(
+                ask="怎么说",
+                ask_en="Give me some {en}, please.",
+                ask_zh="请给我一些{zh}。",
+                replies=(("一只", "a cup"), ("几只", "some cups")),
+                swaps=(("杯子", "cups"), ("玻璃杯", "glasses")),
+                why_title="为什么不能说 some cup？",
+                why_lines=(
+                    "可数名词要用复数：some cups.",
+                    "a cup 一只；some cups 几只；the cups 那些确定的。",
+                ),
             ),
             example_en="Which glasses? Give me some cups, please.",
             example_zh="哪几只杯子？请给我几个杯子。",
@@ -2094,19 +2177,19 @@ LESSON_11 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "桌上的杯子",
         "paragraphs": [
             _para(
-                "厨房里有几只杯子。它们在桌上。",
-                "There are cups in the kitchen. They are on the table.",
+                "我和 Lin 在厨房里。桌上有几只杯子。杯子都在桌上。我想要几只杯子。",
+                "I am in the kitchen with Lin. There are cups on the table. They are on the table. I want some cups.",
             ),
             _para(
-                "你要哪几只？请给我几个杯子。",
-                "Which glasses? Give me some cups, please.",
+                "哪几只杯子？我看着桌上的杯子。我说：「请给我几个杯子。把它们给我。」",
+                "Which glasses? I look at the cups on the table. I say, Give me some cups, please. Give them to me.",
             ),
             _para(
-                "把它们给我。谢谢。",
-                "Give them to me. Thank you.",
+                "Lin 把杯子给我。杯子在我手里。我说谢谢。我们都很高兴。",
+                "Lin gives them to me. They are in my hands now. I say thank you. We are happy.",
             ),
         ],
     },
@@ -2169,13 +2252,19 @@ LESSON_12 = _lesson(
             "be 动词这一单元",
             "把 is / are / isn't 用进真实对话",
             phonetic="/biː/",
-            note_zh=_gnote(
-                "本课不新加时态，只把前面的点再开口一遍。",
-                "提问：Is this your phone? Whose bag is this?",
-                "否定：It isn’t mine.",
-                "存在：There is a desk.",
-                "给予：Give me that one, please.",
-                "能自己连成四到六句，这一单元才算过。",
+            teach=_teach(
+                ask="怎么说",
+                replies=(
+                    ("提问", "Is this your phone? Whose bag is this?"),
+                    ("否定", "It isn’t mine."),
+                    ("存在", "There is a desk."),
+                    ("给予", "Give me that one, please."),
+                ),
+                why_title="这一课要练什么？",
+                why_lines=(
+                    "本课不新加时态，只把前面的点再开口一遍。",
+                    "能自己连成四到六句，这一单元才算过。",
+                ),
             ),
             example_en="Excuse me. Is this your bag? It isn’t mine. There is a phone on the desk.",
             example_zh="打扰一下。这是你的包吗？不是我的。桌上有一部手机。",
@@ -2270,19 +2359,19 @@ LESSON_12 = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "失物招领",
         "paragraphs": [
             _para(
-                "我在失物招领柜台。对不起，打扰一下。",
-                "I am at a lost-and-found desk. Excuse me.",
+                "我在失物招领柜台。桌上有一个包。我说：「对不起，打扰一下。这是你的包吗？」",
+                "I am at a lost-and-found desk. There is a bag on the desk. I say, Excuse me. Is this your bag?",
             ),
             _para(
-                "这是你的包吗？不是我的。这是谁的包？",
-                "Is this your bag? It isn't mine. Whose bag is this?",
+                "这不是我的包。这是谁的包？店员看着这个包。桌上还有一部手机。",
+                "It isn't mine. Whose bag is this? The clerk looks at the bag. There is a phone on the desk too.",
             ),
             _para(
-                "桌上有一部手机。请把那个给我。那是我的手机。谢谢。",
-                "There is a phone on the desk. Give me that one, please. That's my phone. Thank you.",
+                "我说：「请把那个给我。」那是我的手机。我说谢谢。店员说不客气。",
+                "I say, Give me that one, please. That is my phone. I say thank you. The clerk says, You're welcome.",
             ),
         ],
     },

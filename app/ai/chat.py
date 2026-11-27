@@ -55,6 +55,18 @@ def chat_status() -> dict:
     }
 
 
+def explain_grammar(item: dict) -> dict:
+    if not chat_available():
+        raise ChatError("unavailable")
+    data = _deepseek_explain(item)
+    return {
+        "explain_zh": _clip(data.get("explain_zh"), 480),
+        "mode": "deepseek",
+        "mode_zh": "补充说明",
+        "provider": "deepseek",
+    }
+
+
 def review_talk(lesson: dict, goals: list[dict], text: str) -> TalkReview:
     keyword_ids = completed_goal_ids(text, goals)
     if not chat_available():
@@ -95,12 +107,89 @@ def _clip(value: object, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
+def _message_json(body: dict) -> dict:
+    try:
+        message = body["choices"][0]["message"]
+        raw = message.get("content")
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ChatError("bad response") from exc
+    text = str(raw or "").strip()
+    if not text:
+        raise ChatError("empty")
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ChatError("bad response") from exc
+    if not isinstance(data, dict):
+        raise ChatError("bad response")
+    return data
+
+
+def _deepseek_explain(item: dict) -> dict:
+    teach = item.get("teach") or {}
+    payload = {
+        "model": settings.deepseek_model(),
+        "temperature": 0.2,
+        "max_tokens": 360,
+        "thinking": {"type": "disabled"},
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You explain one A1 English word, phrase, or pattern to a solo learner. "
+                    "Reply with JSON only: explain_zh (2 to 4 short Simplified Chinese sentences). "
+                    "If question is present, answer that question about this item. "
+                    "Stay on this item. Do not teach later grammar. "
+                    "Do not claim to be a human teacher. Do not ask for personal data."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "title_zh": item.get("title_zh") or "",
+                        "english": item.get("english") or "",
+                        "chinese": item.get("chinese") or "",
+                        "kind": item.get("kind") or "",
+                        "note_zh": item.get("note_zh") or "",
+                        "phonetic": item.get("phonetic") or "",
+                        "example_en": item.get("example_en") or "",
+                        "example_zh": item.get("example_zh") or "",
+                        "why_title": teach.get("why_title") or "",
+                        "why_lines": teach.get("why_lines") or [],
+                        "replies": teach.get("replies") or [],
+                        "question": item.get("question") or "",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    }
+    url = settings.deepseek_base_url() + "/chat/completions"
+    body = _post_json(
+        url,
+        {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.deepseek_key()}",
+        },
+        payload,
+        timeout=20,
+    )
+    return _message_json(body)
+
+
 def _deepseek_review(lesson: dict, goals: list[dict], text: str) -> dict:
     task = lesson.get("task") or {}
     payload = {
         "model": settings.deepseek_model(),
         "temperature": 0.3,
         "max_tokens": 280,
+        "thinking": {"type": "disabled"},
         "response_format": {"type": "json_object"},
         "messages": [
             {
@@ -137,13 +226,7 @@ def _deepseek_review(lesson: dict, goals: list[dict], text: str) -> dict:
         payload,
         timeout=12,
     )
-    try:
-        content = body["choices"][0]["message"]["content"]
-        data = json.loads(content)
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise ChatError("bad response") from exc
-    if not isinstance(data, dict):
-        raise ChatError("bad response")
+    data = _message_json(body)
     if not isinstance(data.get("goal_ids"), list):
         data["goal_ids"] = []
     return data
@@ -160,7 +243,7 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        raise ChatError("http error") from exc
+        raise ChatError(f"http {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ChatError("unavailable") from exc
     try:

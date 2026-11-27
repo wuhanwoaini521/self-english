@@ -16,6 +16,12 @@ const state = {
   dialogue: null,
   overview: null,
   due: [],
+  readings: [],
+  reading: null,
+  readingIndex: 0,
+  readingArticleId: "",
+  vocabQueue: [],
+  talkTopics: [],
   catalog: null,
   catalogBook: "travel",
   catalogQ: "",
@@ -28,6 +34,9 @@ const state = {
   talkJustSubmitted: false,
   openLessonId: "",
   aimRecap: false,
+  grammarExplain: {},
+  vocabIndex: 0,
+  vocabPhase: "learn",
 };
 
 const view = document.querySelector("#view");
@@ -36,7 +45,11 @@ const zhToggle = document.querySelector("#zh-toggle");
 function pageId() {
   const raw = (location.hash || "#/today").replace(/^#\/?/, "");
   const [page, extra] = raw.split("/");
-  return { page: PAGES.some((item) => item.id === page) ? page : "today", library: extra === "library" };
+  return {
+    page: PAGES.some((item) => item.id === page) ? page : "today",
+    library: extra === "library",
+    itemId: extra && extra !== "library" ? extra : "",
+  };
 }
 
 function go(page, extra) {
@@ -247,20 +260,41 @@ async function loadCore() {
   state.error = "";
   render();
   try {
+    const route = pageId();
     const today = await api("/api/today");
-    const lessonId = state.openLessonId || today.lesson_id;
-    const lesson = await api(`/api/lessons/${lessonId}`);
-    const dialogue = page === "talk" ? await api(`/api/dialogue/${lessonId}`) : null;
     const overview = page === "progress" ? await api("/api/progress") : null;
     const due = page === "today" ? (await api("/api/review/due")).items : [];
+    const readings = page === "reading" || page === "today" ? (await api("/api/readings")).items : state.readings;
+    const vocabQueue = page === "vocab" && !state.library ? (await api("/api/vocab/queue")).items : [];
+    const talkTopics = page === "talk" ? (await api("/api/talk/topics")).items : [];
+    const itemId = route.itemId || "";
+    let lesson = state.lesson;
+    let dialogue = null;
+    let reading = null;
+    if (page === "talk" && itemId) {
+      lesson = await api(`/api/lessons/${itemId}`);
+      dialogue = await api(`/api/dialogue/${itemId}`);
+    } else if (page === "reading" && itemId) {
+      reading = await api(`/api/readings/${itemId}`);
+      lesson = reading;
+    } else if (today.lesson_id) {
+      try {
+        lesson = await api(`/api/lessons/${state.openLessonId || today.lesson_id}`);
+      } catch (error) {
+        lesson = lesson || null;
+      }
+    }
     if (request !== coreRequest) return;
-    const sameLesson = state.lesson?.id === lesson.id;
+    const sameLesson = state.lesson?.id === lesson?.id;
     const localRev = sameLesson ? currentRevision() : 0;
-    const remoteRev = Number(lesson.progress?.revision);
-    if (sameLesson && Number.isFinite(remoteRev) && localRev > remoteRev) {
+    const remoteRev = Number(lesson?.progress?.revision);
+    if (lesson && sameLesson && Number.isFinite(remoteRev) && localRev > remoteRev) {
       lesson.progress = state.lesson.progress;
     }
-    Object.assign(state, { today, lesson, dialogue, overview, due, hideZh: Boolean(lesson.progress.hide_zh) });
+    Object.assign(state, {
+      today, lesson, dialogue, overview, due, readings, reading, vocabQueue, talkTopics,
+      hideZh: Boolean(lesson?.progress?.hide_zh),
+    });
     if (page === "vocab" && state.library) await loadCatalog(true);
   } catch (error) {
     if (request === coreRequest) state.error = error.message;
@@ -372,6 +406,28 @@ function banner(kind, text, retry) {
   return box;
 }
 
+function markIcon(kind) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("teach-mark-icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "2.6");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("d", kind === "yes" ? "M5 12.5 10 17.5 19 7" : "M7 7l10 10M17 7 7 17");
+  svg.append(path);
+  return svg;
+}
+
+function replyMarkKind(zh) {
+  if (zh === "是") return "yes";
+  if (zh === "不是") return "no";
+  return "";
+}
+
 function speakIcon() {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -387,6 +443,22 @@ function speakIcon() {
   return svg;
 }
 
+function strokeIcon(pathD) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("teach-ai-icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("d", pathD);
+  svg.append(path);
+  return svg;
+}
+
 function speakButton(text) {
   const button = document.createElement("button");
   button.type = "button";
@@ -398,7 +470,8 @@ function speakButton(text) {
     : "这台设备没有系统朗读。英文仍可以看、可以练。";
   if (!available) button.disabled = true;
   button.append(speakIcon());
-  button.addEventListener("click", () => speak(text));
+  button.dataset.speak = text;
+  button.addEventListener("click", () => speak(button.dataset.speak || text));
   return button;
 }
 
@@ -457,6 +530,9 @@ function openGloss(anchor, mark) {
   card.className = "gloss-card" + (mobile ? " is-center" : "");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-label", mark.headword || "词卡");
+  const kind = document.createElement("p");
+  kind.className = "kicker";
+  kind.textContent = mark.kind === "grammar" ? "语法" : mark.kind === "phrase" ? "短句" : "词汇";
   const word = document.createElement("p");
   word.className = "gloss-word";
   word.textContent = mark.headword || "";
@@ -496,7 +572,24 @@ function openGloss(anchor, mark) {
     meaning.textContent = mark.sense_zh;
     meta.append(meaning);
   }
-  card.append(word, row, meta);
+  const actions = document.createElement("div");
+  actions.className = "gloss-mark-actions";
+  appendKnowButtons(actions, mark.status, async (result) => {
+    try {
+      await api(`/api/headwords/${encodeURIComponent(mark.headword || mark.headword_id || "")}/mark`, {
+        method: "POST",
+        body: JSON.stringify({ result }),
+      });
+      closeGloss();
+      const articleId = state.reading?.id;
+      if (articleId && state.page === "reading" && pageId().itemId === articleId) {
+        await refreshReadingInPlace(articleId);
+      }
+    } catch (error) {
+      setError(error.message);
+    }
+  });
+  card.append(kind, word, row, meta, actions);
   document.body.append(backdrop, card);
   if (mobile) backdrop.addEventListener("click", closeGloss);
   else {
@@ -505,8 +598,51 @@ function openGloss(anchor, mark) {
   }
   document.addEventListener("keydown", onGlossKey);
   window.addEventListener("resize", closeGloss);
-  window.addEventListener("scroll", closeGloss, true);
   gloss = { anchor, card, backdrop };
+  requestAnimationFrame(() => {
+    if (gloss?.anchor === anchor) window.addEventListener("scroll", closeGloss, true);
+  });
+}
+
+async function refreshReadingInPlace(articleId) {
+  const current = state.reading;
+  const updated = await api(`/api/readings/${encodeURIComponent(articleId)}`);
+  if (
+    current !== state.reading ||
+    state.page !== "reading" ||
+    pageId().itemId !== articleId ||
+    !updated.passage
+  ) return;
+
+  current.passage = updated.passage;
+  if (state.lesson === current) state.lesson.passage = updated.passage;
+  const paragraphs = current.passage.paragraphs || [];
+  if (!paragraphs.length) return;
+  const index = Math.min(Math.max(0, state.readingIndex || 0), paragraphs.length - 1);
+  state.readingIndex = index;
+  const sentence = view.querySelector(".passage-card .passage-block .sentence");
+  if (sentence) {
+    const para = paragraphs[index];
+    sentence.replaceWith(renderAnnotated(para.english, para.marks, "english sentence"));
+  }
+}
+
+function appendKnowButtons(root, status, onPick) {
+  const known = status === "known" || status === "due";
+  const buttons = [["会", "known"]];
+  if (known) buttons.push(["还不会", "unknown"]);
+  buttons.forEach(([label, result]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "gloss-mark-btn" + (result === "known" && known ? " is-on" : "");
+    if (result === "known") button.classList.add("is-know");
+    button.textContent = label;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onPick(result);
+    });
+    root.append(button);
+  });
 }
 
 function glossPosClass(pos) {
@@ -526,7 +662,7 @@ function usableMarks(english, marks) {
     const end = Number(item.end);
     if (!Number.isInteger(start) || !Number.isInteger(end)) return;
     if (start < lastEnd || end <= start || end > english.length) return;
-    if (item.kind !== "vocab" && item.kind !== "grammar") return;
+    if (item.kind !== "vocab" && item.kind !== "grammar" && item.kind !== "phrase") return;
     out.push(item);
     lastEnd = end;
   });
@@ -550,7 +686,9 @@ function renderAnnotated(english, marks, className) {
     button.textContent = english.slice(mark.start, mark.end);
     button.setAttribute("aria-expanded", "false");
     button.setAttribute("aria-haspopup", "dialog");
-    button.setAttribute("aria-label", `${mark.kind === "grammar" ? "语法" : "生词"} ${mark.headword || button.textContent}`);
+    const kindLabel = mark.kind === "grammar" ? "语法" : mark.kind === "phrase" ? "短句" : "生词";
+    button.setAttribute("aria-label", `${kindLabel} ${mark.headword || button.textContent}`);
+    if (mark.status === "due") button.classList.add("is-due");
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       openGloss(button, mark);
@@ -615,10 +753,7 @@ async function finishLesson() {
 }
 
 function continueLesson() {
-  const step = progress()?.step || "vocab";
-  if (step === "recap") visitStep("recap");
-  else if (step === "done") go("progress");
-  else visitStep(step);
+  go("reading", state.today?.lesson_id);
 }
 
 async function openLesson(lessonId) {
@@ -663,7 +798,6 @@ function renderStepNav() {
 
 function renderToday() {
   const root = document.createDocumentFragment();
-  if (state.lesson) root.append(renderStepNav());
   const due = state.due || [];
   let reviewPanel;
   if (due.length) {
@@ -714,8 +848,8 @@ function renderToday() {
   const kicker = document.createElement("p");
   kicker.className = "kicker";
   kicker.textContent = viewingOther
-    ? `${state.lesson.level || "A1"} · 回去看`
-    : `${state.today.level} · 第 ${state.today.lesson_no} 课`;
+    ? `${state.lesson.level || "CET-4"} · 回去看`
+    : `${state.today.level} · 第 ${state.today.lesson_no} 篇`;
   const title = document.createElement("h1");
   title.textContent = viewingOther ? state.lesson.title_zh : state.today.title_zh;
   const source = document.createElement("p");
@@ -740,38 +874,31 @@ function renderToday() {
   lesson.append(kicker, title, source, note, action);
   root.append(lesson);
   if (reviewPanel) root.append(reviewPanel);
-  if (reached("recap")) root.append(renderRecap());
   const queue = state.today.lessons || [];
   if (queue.length) {
     const month = document.createElement("section");
     month.className = "card";
     const monthTitle = document.createElement("h2");
-    monthTitle.textContent = "课程";
+    monthTitle.textContent = "阅读";
     const monthHelp = document.createElement("p");
     monthHelp.className = "audio-tag";
-    monthHelp.textContent = "点已学过的课可以回去看。同一天可以连续学完。";
+    monthHelp.textContent = "每篇都是完整短文。点开就能读，不必按顺序。";
     const list = document.createElement("ul");
     list.className = "list";
     queue.forEach((item) => {
       const row = document.createElement("li");
-      const locked = item.status === "upcoming";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "today-lesson-btn is-" + item.status;
-      btn.disabled = locked;
       const name = document.createElement("p");
       name.className = "english";
       name.style.fontSize = "1.05rem";
       name.textContent = `${item.lesson_no}. ${item.title_zh}`;
       const status = document.createElement("p");
       status.className = "audio-tag";
-      status.textContent = locked
-        ? item.label
-        : item.status === "current"
-          ? `正在学 · ${item.label} · 点这里继续`
-          : "已完成 · 点这里回去看";
+      status.textContent = item.status === "done" ? "已读完 · 点这里再看" : "点这里阅读";
       btn.append(name, status);
-      if (!locked) btn.addEventListener("click", () => openLesson(item.id));
+      btn.addEventListener("click", () => go("reading", item.id));
       row.append(btn);
       list.append(row);
     });
@@ -854,7 +981,7 @@ function renderVocab() {
   const tabs = document.createElement("div");
   tabs.className = "row vocab-tabs";
   [
-    ["lesson", "本课词汇"],
+    ["lesson", "待复习"],
     ["library", "词句库"],
   ].forEach(([id, label]) => {
     const button = document.createElement("button");
@@ -869,95 +996,56 @@ function renderVocab() {
     });
     tabs.append(button);
   });
-  if (!state.library) root.append(renderStepNav());
   root.append(tabs);
   if (state.library) {
     root.append(renderLibrary());
     return root;
   }
-  const items = state.lesson.expressions;
-  const phase = progress()?.vocab_phase || "learn";
-  if (phase === "done") {
-    root.append(renderVocabDone(items.length));
+  const items = state.vocabQueue || [];
+  if (!items.length) {
+    root.append(banner("empty", "这些词都标过会了。到期漏出时会再出现。"));
     return root;
   }
-  const currentIndex = Math.min(progress()?.vocab_index || 0, items.length - 1);
-  const preview = phase === "recall" && recallPreview?.lesson === state.lesson.id && recallPreview.revision === progress().revision;
-  const index = preview ? recallPreview.index : currentIndex;
+  const index = Math.min(Math.max(0, state.vocabIndex || 0), items.length - 1);
+  state.vocabIndex = index;
   const item = items[index];
-  const card = phase === "recall" ? renderRecallCard(item, index, items.length) : renderTeachCard(item, index, items.length);
+  const card = renderTeachCard(item, index, items.length);
   root.append(cardDeck(card, index, items.length, async next => {
-    if (phase === "learn") await showVocabCard(next, phase);
-    else {
-      recallPreview = { lesson: state.lesson.id, revision: progress().revision, index: next };
-      state.flipped = false;
-      render();
-    }
-  }, "本课词卡"));
+    state.vocabIndex = next;
+    state.flipped = false;
+    render();
+  }, "生词"));
   return root;
 }
 
-function renderVocabDone(total) {
-  const card = document.createElement("section");
-  card.className = "card vocab-card";
-  const kicker = document.createElement("p");
-  kicker.className = "kicker";
-  kicker.textContent = "本课词汇";
-  const title = document.createElement("h1");
-  title.textContent = `${total} 个词评完了`;
-  const brief = document.createElement("p");
-  brief.className = "talk-brief";
-  brief.textContent = "评分只决定复习间隔，不会把你扔去下一页。下一步是听读短对话，你点了才过去。";
-  const actions = document.createElement("div");
-  actions.className = "vocab-actions";
-  const next = document.createElement("button");
-  next.type = "button";
-  next.className = "primary";
-  next.textContent = "去听读";
-  next.addEventListener("click", () => advanceTo("listen"));
-  const again = document.createElement("button");
-  again.type = "button";
-  again.className = "ghost";
-  again.textContent = "再看一遍";
-  again.addEventListener("click", async () => {
-    await saveProgress({
-      step: progress()?.step || "vocab",
-      vocab_index: 0,
-      vocab_phase: "learn",
+async function markQueueItem(item, result) {
+  try {
+    await api(`/api/headwords/${encodeURIComponent(item.headword_id || item.english)}/mark`, {
+      method: "POST",
+      body: JSON.stringify({ result }),
     });
     state.flipped = false;
-    render();
-  });
-  actions.append(next, again);
-  card.append(kicker, title, brief, actions);
-  return card;
+    await loadCore();
+  } catch (error) {
+    setError(error.message);
+  }
 }
 
 function vocabDots(index, total) {
-  const dots = document.createElement("div");
-  dots.className = "vocab-dots";
-  dots.setAttribute("aria-hidden", "true");
-  for (let i = 0; i < total; i += 1) {
-    const dot = document.createElement("span");
-    dot.className = "vocab-dot" + (i === index ? " is-on" : i < index ? " is-done" : "");
-    dots.append(dot);
-  }
-  return dots;
+  const bar = document.createElement("div");
+  bar.className = "vocab-bar";
+  bar.setAttribute("aria-hidden", "true");
+  const fill = document.createElement("span");
+  fill.className = "vocab-bar-fill";
+  fill.style.width = `${total ? Math.max(8, ((index + 1) / total) * 100) : 0}%`;
+  bar.append(fill);
+  return bar;
 }
 
 async function showVocabCard(index, phase) {
   state.flipped = false;
-  const current = progress() || {};
-  const step = current.step || "vocab";
-  if (current.vocab_index === index && current.vocab_phase === phase) {
-    render();
-    return;
-  }
-  await saveProgress({
-    step,
-    vocab_index: index,
-    vocab_phase: phase,
-  });
+  state.vocabIndex = index;
+  state.vocabPhase = phase || "learn";
   render();
 }
 
@@ -1036,6 +1124,299 @@ function vocabHead(label, index, total) {
   return head;
 }
 
+function hasGrammarTeach(item) {
+  const teach = item && item.teach;
+  if (!teach) return false;
+  return Boolean(
+    teach.ask ||
+    teach.ask_en ||
+    (teach.replies && teach.replies.length) ||
+    (teach.swaps && teach.swaps.length) ||
+    teach.why_title
+  );
+}
+
+function fillAsk(template, fallback, swap) {
+  if (!template) return fallback || "";
+  if (!swap) return fallback || template.replaceAll("{en}", "").replaceAll("{zh}", "").trim();
+  return template.replaceAll("{en}", swap.en || "").replaceAll("{zh}", swap.zh || "");
+}
+
+function teachLabel(text) {
+  const label = document.createElement("p");
+  label.className = "teach-label";
+  label.textContent = text;
+  return label;
+}
+
+function renderGrammarTeach(item) {
+  const teach = item.teach || {};
+  const block = document.createElement("div");
+  block.className = "teach-block grammar-teach";
+  const swaps = teach.swaps || [];
+  let selected = swaps.find((itemSwap) => item.example_en && item.example_en.includes(itemSwap.en)) || swaps[0] || null;
+
+  const askEn = () => fillAsk(teach.ask_en, item.example_en, selected);
+  const askZh = () => fillAsk(teach.ask_zh, item.example_zh, selected);
+
+  const ask = document.createElement("section");
+  ask.className = "teach-section";
+  const line = document.createElement("div");
+  line.className = "teach-ask-line";
+  const en = document.createElement("p");
+  en.className = "teach-example";
+  const zh = document.createElement("p");
+  zh.className = "zh can-hide";
+  const speak = speakButton(askEn());
+  line.append(en, speak);
+  ask.append(teachLabel(teach.ask || "怎么问"), line, zh);
+
+  const replyBox = document.createElement("section");
+  replyBox.className = "teach-section";
+  if (teach.replies && teach.replies.length) {
+    replyBox.append(teachLabel("怎么回答"));
+    teach.replies.forEach((reply) => {
+      const row = document.createElement("p");
+      row.className = "teach-reply";
+      const label = document.createElement("span");
+      const mark = replyMarkKind(reply.zh);
+      if (mark) {
+        label.className = "teach-reply-mark teach-reply-mark-" + mark;
+        label.setAttribute("aria-label", reply.zh);
+        label.append(markIcon(mark));
+      } else {
+        label.className = "teach-reply-zh can-hide";
+        label.textContent = reply.zh;
+      }
+      const english = document.createElement("span");
+      english.className = "teach-reply-en";
+      english.textContent = reply.en;
+      row.append(label, english);
+      replyBox.append(row);
+    });
+  }
+
+  const swapBox = document.createElement("section");
+  swapBox.className = "teach-section";
+  const swapButtons = [];
+  if (swaps.length) {
+    swapBox.append(teachLabel("换个词试试"));
+    const row = document.createElement("div");
+    row.className = "teach-swaps";
+    swaps.forEach((swap) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "teach-swap";
+      button.dataset.en = swap.en;
+      const zhPart = document.createElement("span");
+      zhPart.className = "can-hide";
+      zhPart.textContent = swap.zh;
+      const enPart = document.createElement("span");
+      enPart.textContent = swap.en;
+      button.append(zhPart, enPart);
+      button.addEventListener("click", () => {
+        selected = swap;
+        refreshAsk();
+      });
+      swapButtons.push(button);
+      row.append(button);
+    });
+    swapBox.append(row);
+  }
+
+  function refreshAsk() {
+    const english = askEn();
+    en.textContent = english;
+    zh.textContent = askZh();
+    speak.dataset.speak = english;
+    swapButtons.forEach((button) => {
+      const on = button.dataset.en === (selected && selected.en);
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+  refreshAsk();
+
+  block.append(ask);
+  if (teach.replies && teach.replies.length) block.append(replyBox);
+  if (swaps.length) block.append(swapBox);
+  if (teach.why_title || (teach.why_lines && teach.why_lines.length)) {
+    const details = document.createElement("details");
+    details.className = "teach-why";
+    const summary = document.createElement("summary");
+    summary.textContent = teach.why_title || "为什么？";
+    details.append(summary);
+    (teach.why_lines || []).forEach((lineText) => {
+      const p = document.createElement("p");
+      p.className = "teach-why-line";
+      p.textContent = lineText;
+      details.append(p);
+    });
+    details.addEventListener("toggle", () => {
+      if (details.open) details.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    block.append(details);
+  }
+  block.append(renderGrammarMore(item));
+  return block;
+}
+
+function grammarExplainEntry(id) {
+  return state.grammarExplain[id] || { status: "", text: "", message: "", question: "" };
+}
+
+function renderGrammarMore(item) {
+  const box = document.createElement("div");
+  box.className = "teach-more";
+  const start = document.createElement("button");
+  start.type = "button";
+  start.className = "teach-more-btn";
+  const out = document.createElement("div");
+  let askOpen = false;
+
+  function paint() {
+    const current = grammarExplainEntry(item.id);
+    const busy = current.status === "loading";
+    out.replaceChildren();
+    start.hidden = Boolean(current.text);
+    start.disabled = busy;
+    start.textContent = busy && !current.text ? "正在请 DeepSeek 讲…" : "更详细一点";
+    if (current.text) {
+      out.append(renderAiPanel(item, current, busy));
+    }
+    if (current.status === "error") {
+      out.append(
+        banner("empty", current.message || "讲解失败。", () => {
+          requestExplain(current.question || "");
+        })
+      );
+    }
+  }
+
+  function renderAiPanel(card, current, busy) {
+    const panel = document.createElement("section");
+    panel.className = "teach-ai";
+    const kicker = document.createElement("p");
+    kicker.className = "kicker";
+    kicker.textContent = "DeepSeek 讲解";
+    const note = document.createElement("p");
+    note.className = "teach-explain";
+    note.textContent = current.text;
+    if (current.question) {
+      const asked = document.createElement("p");
+      asked.className = "teach-ask-q";
+      asked.textContent = "问：" + current.question;
+      panel.append(kicker, asked, note);
+    } else {
+      panel.append(kicker, note);
+    }
+    const foot = document.createElement("div");
+    foot.className = "teach-ai-foot";
+    const askBtn = document.createElement("button");
+    askBtn.type = "button";
+    askBtn.className = "teach-ai-tool";
+    askBtn.setAttribute("aria-expanded", askOpen ? "true" : "false");
+    askBtn.setAttribute("aria-label", "问 DeepSeek");
+    askBtn.title = "问一句";
+    askBtn.disabled = busy;
+    askBtn.append(strokeIcon("M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"));
+    askBtn.addEventListener("click", () => {
+      askOpen = !askOpen;
+      paint();
+      if (askOpen) {
+        const field = box.querySelector(".teach-ask-input");
+        field?.focus();
+      }
+    });
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "teach-ai-tool";
+    refresh.setAttribute("aria-label", "重新讲解");
+    refresh.title = "重新讲解";
+    refresh.disabled = busy;
+    refresh.append(strokeIcon("M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"));
+    refresh.addEventListener("click", () => {
+      askOpen = false;
+      requestExplain("").catch(() => {});
+    });
+    foot.append(askBtn, refresh);
+    if (askOpen) {
+      const form = document.createElement("form");
+      form.className = "teach-ask";
+      const field = document.createElement("input");
+      field.className = "teach-ask-input";
+      field.type = "text";
+      field.maxLength = 200;
+      field.setAttribute("aria-label", "向 DeepSeek 提问");
+      field.placeholder = "例如：为什么不能说 Yes, I'm?";
+      const send = document.createElement("button");
+      send.type = "submit";
+      send.className = "ghost";
+      send.textContent = "问";
+      send.disabled = busy;
+      form.append(field, send);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const question = field.value.trim();
+        if (!question) {
+          field.focus();
+          return;
+        }
+        askOpen = false;
+        requestExplain(question).catch(() => {});
+      });
+      panel.append(form);
+    }
+    panel.append(foot);
+    return panel;
+  }
+
+  async function requestExplain(question) {
+    const lessonId = item.lesson_id || state.lesson?.id;
+    if (!item.id || !lessonId) return;
+    const previous = grammarExplainEntry(item.id);
+    state.grammarExplain[item.id] = {
+      status: "loading",
+      text: previous.text || "",
+      message: "",
+      question: question || "",
+    };
+    paint();
+    try {
+      const result = await api(
+        `/api/lessons/${encodeURIComponent(lessonId)}/expressions/${encodeURIComponent(item.id)}/explain`,
+        { method: "POST", body: JSON.stringify({ question: question || "" }) }
+      );
+      state.grammarExplain[item.id] = {
+        status: "ok",
+        text: result.explain_zh || "这一条暂时没有更多说明。",
+        message: "",
+        question: question || "",
+      };
+    } catch (error) {
+      state.grammarExplain[item.id] = {
+        status: "error",
+        text: previous.text || "",
+        message: error.message,
+        question: question || "",
+      };
+    }
+    paint();
+    const target = box.querySelector(".teach-ai") || box;
+    target.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
+
+  start.addEventListener("click", () => {
+    requestExplain("").catch(() => {});
+  });
+  const row = document.createElement("div");
+  row.className = "teach-more-row";
+  row.append(start, speakButton(item.english));
+  box.append(row, out);
+  paint();
+  return box;
+}
+
 function renderTeachCard(item, index, total) {
   const card = document.createElement("section");
   card.className = "card vocab-card teach-card";
@@ -1059,43 +1440,50 @@ function renderTeachCard(item, index, total) {
     face.append(ipa);
   }
   face.append(meaning);
-  if (item.note_zh) {
-    const note = document.createElement("div");
-    note.className = "teach-block";
-    const title = document.createElement("p");
-    title.className = "kicker";
-    title.textContent = item.kind === "grammar" ? "语法" : "怎么记";
-    const body = document.createElement("p");
-    body.className = "teach-note";
-    body.textContent = item.note_zh;
-    note.append(title, body);
-    face.append(note);
-  }
-  if (item.example_en) {
-    const example = document.createElement("div");
-    example.className = "teach-block";
-    const title = document.createElement("p");
-    title.className = "kicker";
-    title.textContent = "例句";
-    const en = document.createElement("p");
-    en.className = "teach-example";
-    en.textContent = item.example_en;
-    example.append(title, en);
-    if (item.example_zh) {
-      const zh = document.createElement("p");
-      zh.className = "zh can-hide";
-      zh.textContent = item.example_zh;
-      example.append(zh);
+  if (hasGrammarTeach(item)) {
+    face.append(renderGrammarTeach(item));
+  } else {
+    if (item.note_zh) {
+      const note = document.createElement("div");
+      note.className = "teach-block";
+      const title = document.createElement("p");
+      title.className = "kicker";
+      title.textContent = item.kind === "grammar" ? "语法" : "怎么记";
+      const body = document.createElement("p");
+      body.className = "teach-note";
+      body.textContent = item.note_zh;
+      note.append(title, body);
+      face.append(note);
     }
-    face.append(example);
+    if (item.example_en) {
+      const example = document.createElement("div");
+      example.className = "teach-block";
+      const title = document.createElement("p");
+      title.className = "kicker";
+      title.textContent = "例句";
+      const en = document.createElement("p");
+      en.className = "teach-example";
+      en.textContent = item.example_en;
+      example.append(title, en);
+      if (item.example_zh) {
+        const zh = document.createElement("p");
+        zh.className = "zh can-hide";
+        zh.textContent = item.example_zh;
+        example.append(zh);
+      }
+      face.append(example);
+    }
+    face.append(renderGrammarMore(item));
   }
   const actions = document.createElement("div");
   actions.className = "vocab-actions";
-  const nav = document.createElement("div");
-  nav.className = "vocab-nav";
-  nav.append(speakButton(item.english));
-  actions.append(nav);
-  if (index + 1 === total) {
+  if (item.headword_id) {
+    const grades = document.createElement("div");
+    grades.className = "vocab-grades is-single";
+    appendKnowButtons(grades, item.status, (result) => markQueueItem(item, result));
+    actions.append(grades);
+  }
+  if (!item.headword_id && index + 1 === total) {
     const next = document.createElement("button");
     next.type = "button";
     next.className = "primary";
@@ -1166,7 +1554,7 @@ function renderRecallCard(item, index, total) {
   nav.className = "vocab-nav";
   nav.append(speakButton(item.english));
   actions.append(nav);
-  if (index !== progress().vocab_index) {
+  if (index !== progress()?.vocab_index) {
     const resume = document.createElement("button");
     resume.type = "button";
     resume.className = "primary";
@@ -1174,24 +1562,32 @@ function renderRecallCard(item, index, total) {
     resume.onclick = () => { recallPreview = null; state.flipped = false; render(); };
     actions.append(resume);
   } else if (state.flipped) {
-    const grades = document.createElement("div");
-    grades.className = "vocab-grades";
-    [
-      ["forgot", "忘了"],
-      ["fuzzy", "模糊"],
-      ["remembered", "记得"],
-    ].forEach(([id, label]) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "grade " + id;
-      button.textContent = label;
-      button.addEventListener("click", () => submitGrade(item, id, {
-        vocab_index: Math.min(index + 1, total - 1),
-        vocab_phase: index + 1 === total ? "done" : "recall",
-      }));
-      grades.append(button);
-    });
-    actions.append(grades);
+    if (item.headword_id) {
+      const row = document.createElement("div");
+      row.className = "vocab-toolbar";
+      appendKnowButtons(row, item.status, (result) => markQueueItem(item, result));
+      row.append(speakButton(item.english));
+      actions.append(row);
+    } else {
+      const grades = document.createElement("div");
+      grades.className = "vocab-grades";
+      [
+        ["forgot", "忘了"],
+        ["fuzzy", "模糊"],
+        ["remembered", "记得"],
+      ].forEach(([id, label]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "grade " + id;
+        button.textContent = label;
+        button.addEventListener("click", () => submitGrade(item, id, {
+          vocab_index: Math.min(index + 1, total - 1),
+          vocab_phase: index + 1 === total ? "done" : "recall",
+        }));
+        grades.append(button);
+      });
+      actions.append(grades);
+    }
   }
   card.append(vocabHead("回忆", index, total), face, actions);
   return card;
@@ -1261,77 +1657,113 @@ function renderLibrary() {
   return panel;
 }
 
-function renderPassage(passage, index) {
-  const card = document.createElement("section");
-  card.className = "card passage-card";
-  const kicker = document.createElement("p");
-  kicker.className = "kicker";
-  const title = document.createElement("h1");
-  title.textContent = passage.title_zh || "短文";
-  const help = document.createElement("p");
-  help.className = "audio-tag";
-  help.textContent = "浅蓝虚线是生词，紫色实线是语法。点喇叭，用这台设备的系统语音读出来，不是录音。没声音时先开媒体音量。";
-  card.append(kicker, title, help);
-  const total = passage.paragraphs.length;
-  kicker.textContent = `短文 · 第 ${index + 1} / ${total} 段`;
-  const para = passage.paragraphs[index];
-  const block = document.createElement("div");
-  block.className = "passage-block";
-  block.append(
-    renderAnnotated(para.english, para.marks, "english sentence"),
-    Object.assign(document.createElement("p"), { className: "zh can-hide", textContent: para.chinese }),
-    speakButton(para.english)
-  );
-  card.append(block);
-  return card;
-}
-
-function renderReading() {
+function renderReadingList() {
   const root = document.createDocumentFragment();
-  root.append(renderStepNav());
-  const passage = state.lesson.passage;
-  const paragraphs = passage?.paragraphs?.length || 0;
-  const index = Math.min(progress().listen_index, paragraphs);
-  const changePage = async next => {
-    await saveProgress({ listen_index: next });
-    render();
-  };
-  if (index < paragraphs) {
-    root.append(cardDeck(renderPassage(passage, index), index, paragraphs + 1, changePage, "听读"));
-    return root;
-  }
   const card = document.createElement("section");
   card.className = "card";
-  const listenKicker = document.createElement("p");
-  listenKicker.className = "kicker";
-  listenKicker.textContent = `听读 · 第 ${index + 1} / ${paragraphs + 1} 页`;
-  const listenTitle = document.createElement("h1");
-  listenTitle.textContent = "短对话";
-  const listenHelp = document.createElement("p");
-  listenHelp.className = "audio-tag";
-  listenHelp.textContent = "点喇叭，用这台设备的系统语音读出来。没声音时先开媒体音量。";
-  card.append(listenKicker, listenTitle, listenHelp);
-  state.lesson.dialogue.forEach((line) => card.append(renderScriptLine(line)));
-  root.append(cardDeck(card, index, paragraphs + 1, changePage, "听读"));
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  kicker.textContent = "阅读";
+  const title = document.createElement("h1");
+  title.textContent = "长篇精读";
+  const help = document.createElement("p");
+  help.className = "audio-tag";
+  help.textContent = "每篇是完整短文。浅蓝虚线是词汇，紫色实线是语法，短句另有划线。没标的都按不会。会了的下一篇不再划出，到期会再漏出来。";
+  card.append(kicker, title, help);
+  const list = document.createElement("ul");
+  list.className = "list";
+  (state.readings || []).forEach((item, index) => {
+    const row = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "today-lesson-btn is-" + (item.done ? "done" : "unread");
+    const name = document.createElement("p");
+    name.className = "english";
+    name.style.fontSize = "1.05rem";
+    name.textContent = `${index + 1}. ${item.title_zh}`;
+    const meta = document.createElement("p");
+    meta.className = "audio-tag";
+    meta.textContent = `${item.word_count} 词 · 还剩 ${item.mark_visible} 处划线`;
+    btn.append(name, meta);
+    btn.addEventListener("click", () => go("reading", item.id));
+    row.append(btn);
+    list.append(row);
+  });
+  if (!(state.readings || []).length) card.append(banner("empty", "还没有文章。"));
+  else card.append(list);
+  root.append(card);
+  return root;
+}
+
+function renderReadingArticle(article) {
+  const root = document.createDocumentFragment();
+  const passage = article.passage || {};
+  const card = document.createElement("section");
+  card.className = "card passage-card";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "返回文章列表";
+  back.addEventListener("click", () => go("reading"));
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  const words = (passage.paragraphs || []).reduce((sum, para) => sum + (para.english || "").split(/\s+/).filter(Boolean).length, 0);
+  kicker.textContent = `阅读 · ${article.level || "CET-4"} · 约 ${words} 词`;
+  const title = document.createElement("h1");
+  title.textContent = passage.title_zh || article.title_zh || "短文";
+  const help = document.createElement("p");
+  help.className = "audio-tag";
+  help.textContent = "浅蓝虚线是词汇，紫色实线是语法，短句也有划线。没标的都按不会，点开标会即可。朗读是这台设备的系统语音，不是录音。";
+  const paragraphs = passage.paragraphs || [];
+  const articleId = article.id || passage.title_zh || article.title_zh || "reading";
+  if (state.readingArticleId !== articleId) {
+    state.readingArticleId = articleId;
+    state.readingIndex = 0;
+  }
+  card.append(back, kicker, title, help);
+  if (!paragraphs.length) {
+    card.append(banner("empty", "这篇短文还没有正文。"));
+    root.append(card);
+  } else {
+    const index = Math.min(Math.max(0, state.readingIndex || 0), paragraphs.length - 1);
+    state.readingIndex = index;
+    const para = paragraphs[index];
+    const block = document.createElement("div");
+    block.className = "passage-block";
+    block.append(
+      renderAnnotated(para.english, para.marks, "english sentence"),
+      Object.assign(document.createElement("p"), { className: "zh can-hide", textContent: para.chinese }),
+      speakButton(para.english)
+    );
+    card.append(block);
+    root.append(cardDeck(card, index, paragraphs.length, next => {
+      state.readingIndex = next;
+      render();
+      view.querySelector(".study-deck")?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "start",
+      });
+    }, "阅读"));
+  }
   const quiz = document.createElement("section");
   quiz.className = "card quiz-card";
   const quizKicker = document.createElement("p");
   quizKicker.className = "kicker";
   quizKicker.textContent = "理解题";
   const quizTitle = document.createElement("h1");
-  quizTitle.textContent = "听完选一选";
+  quizTitle.textContent = "读完选一选";
   const quizHelp = document.createElement("p");
   quizHelp.className = "audio-tag";
-  quizHelp.textContent = "对照上面的对话。选错了可以再选。";
+  quizHelp.textContent = "对照上面的文章。选错了可以再选。";
   quiz.append(quizKicker, quizTitle, quizHelp);
   const results = { ...(progress()?.question_results || {}) };
   const letters = "ABCDE";
-  state.lesson.questions.forEach((question, index) => {
+  (article.questions || []).forEach((question, index) => {
     const wrap = document.createElement("div");
     wrap.className = "quiz-block";
     const num = document.createElement("p");
     num.className = "quiz-num";
-    num.textContent = `第 ${index + 1} 题 · 共 ${state.lesson.questions.length} 题`;
+    num.textContent = `第 ${index + 1} 题 · 共 ${article.questions.length} 题`;
     const prompt = document.createElement("h2");
     prompt.textContent = question.prompt_en;
     const zh = document.createElement("p");
@@ -1371,29 +1803,88 @@ function renderReading() {
     });
     quiz.append(wrap);
   });
-  const actions = document.createElement("div");
-  actions.className = "talk-actions";
-  const back = document.createElement("button");
-  back.type = "button";
-  back.className = "ghost";
-  back.textContent = "返回词汇";
-  back.addEventListener("click", () => visitStep("vocab"));
-  const next = document.createElement("button");
-  next.type = "button";
-  next.className = "primary";
-  next.textContent = "去对话";
-  next.addEventListener("click", () => advanceTo("talk"));
-  actions.append(back, next);
-  quiz.append(actions);
+  const doneWrap = document.createElement("div");
+  doneWrap.className = "talk-actions";
+  const done = document.createElement("button");
+  done.type = "button";
+  const already = article.progress?.step === "done";
+  done.className = already ? "ghost" : "primary";
+  done.textContent = already ? "已经读完" : "读完了";
+  if (!already) {
+    done.addEventListener("click", async () => {
+      try {
+        await saveProgress({ step: "done" });
+        render();
+      } catch (error) {
+        setError(error.message);
+      }
+    });
+  }
+  doneWrap.append(done);
+  quiz.append(doneWrap);
   root.append(quiz);
   return root;
 }
 
+function renderReading() {
+  const article = state.reading;
+  if (article?.passage) return renderReadingArticle(article);
+  return renderReadingList();
+}
+
+function renderTalkTopics() {
+  const root = document.createDocumentFragment();
+  const card = document.createElement("section");
+  card.className = "card";
+  const kicker = document.createElement("p");
+  kicker.className = "kicker";
+  kicker.textContent = "对话";
+  const title = document.createElement("h1");
+  title.textContent = "选一个话题";
+  const help = document.createElement("p");
+  help.className = "audio-tag";
+  help.textContent = "和阅读分开。点进一题，用英文写出你的话。";
+  card.append(kicker, title, help);
+  const list = document.createElement("ul");
+  list.className = "list";
+  (state.talkTopics || []).forEach((item, index) => {
+    const row = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "today-lesson-btn is-unread";
+    const name = document.createElement("p");
+    name.className = "english";
+    name.style.fontSize = "1.05rem";
+    name.textContent = `${index + 1}. ${item.title_zh}`;
+    btn.append(name);
+    btn.addEventListener("click", () => go("talk", item.id));
+    row.append(btn);
+    list.append(row);
+  });
+  if (!(state.talkTopics || []).length) card.append(banner("empty", "还没有话题。"));
+  else card.append(list);
+  root.append(card);
+  return root;
+}
+
 function renderTalk() {
+  if (!pageId().itemId) return renderTalkTopics();
+  if (!state.lesson) {
+    const root = document.createDocumentFragment();
+    root.append(banner("empty", "打不开这个话题。"));
+    return root;
+  }
   const session = state.dialogue;
   const task = state.lesson?.task || {};
   const root = document.createDocumentFragment();
-  root.append(renderStepNav());
+  const backWrap = document.createElement("p");
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "返回话题列表";
+  back.addEventListener("click", () => go("talk"));
+  backWrap.append(back);
+  root.append(backWrap);
 
   const heard = document.createElement("section");
   heard.className = "card";
@@ -1486,7 +1977,7 @@ function renderTalk() {
   if (allDone) {
     const ok = document.createElement("p");
     ok.className = "talk-ok";
-    ok.textContent = "这几项都说到了。可以去做复盘。";
+    ok.textContent = "这几项都说到了。";
     turn.append(ok);
   }
   if (session?.hint) {
@@ -1495,7 +1986,7 @@ function renderTalk() {
     const hintKicker = document.createElement("p");
     hintKicker.className = "kicker";
     hintKicker.textContent = "提示";
-    const hintLine = state.lesson.dialogue.find((line) => line.id === session.hint.id);
+    const hintLine = (state.lesson.dialogue || []).find((line) => line.id === session.hint.id);
     const en = hintLine
       ? renderAnnotated(hintLine.english, hintLine.marks, "teach-example")
       : Object.assign(document.createElement("p"), { className: "teach-example", textContent: session.hint.english });
@@ -1527,7 +2018,7 @@ function renderTalk() {
       state.talkDraft = area.value;
       state.dialogue = await api(`/api/dialogue/${state.lesson.id}/order`, {
         method: "POST",
-        body: JSON.stringify({ text: area.value, expected_revision: progress().revision }),
+        body: JSON.stringify({ text: area.value, expected_revision: progress()?.revision }),
       });
       state.lesson.progress = state.dialogue.progress;
       state.talkJustSubmitted = true;
@@ -1539,41 +2030,23 @@ function renderTalk() {
       setError(error.message);
     }
   });
-  const recap = document.createElement("button");
-  recap.type = "button";
-  recap.className = allDone ? "primary" : "talk-skip";
-  recap.textContent = allDone ? "去做复盘" : "先去做复盘";
-  recap.addEventListener("click", async () => {
-    recap.disabled = true;
-    try {
-      await advanceTo("recap");
-    } catch (error) {
-      recap.disabled = false;
-      setError(error.message);
-    }
-  });
   const voice = document.createElement("button");
   voice.type = "button";
   voice.className = "ghost";
   voice.disabled = true;
   voice.textContent = session?.voice?.label_zh || "实时语音还没接入";
   voice.setAttribute("aria-disabled", "true");
-  const back = document.createElement("button");
-  back.type = "button";
-  back.className = "ghost";
-  back.textContent = "返回听读";
-  back.addEventListener("click", () => visitStep("listen"));
 
   const actions = document.createElement("div");
   actions.className = "talk-actions";
   const secondary = document.createElement("div");
   secondary.className = "talk-actions-row";
   if (allDone) {
-    secondary.append(submit, back);
-    actions.append(recap, secondary, voice);
+    secondary.append(hint, voice);
+    actions.append(submit, secondary);
   } else {
-    secondary.append(hint, back);
-    actions.append(submit, secondary, voice, recap);
+    secondary.append(hint, voice);
+    actions.append(submit, secondary);
   }
   turn.append(actions);
   root.append(turn);
@@ -1819,8 +2292,8 @@ function render() {
     return;
   }
   if (state.error) view.append(banner("error", state.error, loadCore));
-  if (!state.lesson && state.page !== "progress") {
-    if (!state.error) view.append(banner("empty", "还没有课程。"));
+  if (!state.today && state.page !== "progress" && state.page !== "reading" && state.page !== "vocab" && state.page !== "talk") {
+    if (!state.error) view.append(banner("empty", "还没有内容。"));
     return;
   }
   const page = {

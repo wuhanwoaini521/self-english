@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .lesson_builder import SOURCE_NOTE, _expr, _lesson, _line, _para, grammar, join_parts, vocab
-from .lessons.book1_unit1 import BOOK1_UNIT1
+from .lessons.cet4_unit1 import CET4_UNIT1
 
 __all__ = [
     "SOURCE_NOTE",
@@ -120,20 +120,28 @@ CAFE_ORDER = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "一杯拿铁",
         "paragraphs": [
             _para(
-                "我在咖啡馆。我想要一杯拿铁。谢谢。",
+                "我在咖啡馆。店里很安静。我看了看菜单。我想要一杯拿铁。谢谢。",
                 "I am at a ",
                 vocab("cafe", phonetic="/kæˈfeɪ/", pos="名词", sense_zh="咖啡馆"),
-                ". ",
+                ". It is quiet. I look at the menu. ",
                 grammar("I'd like", phonetic="/aɪd laɪk/", pos="动词短语", sense_zh="我想要（I would like 的缩写）"),
                 " a ",
                 vocab("latte", phonetic="/ˈlɑː.teɪ/", pos="名词", sense_zh="拿铁咖啡"),
                 ", please. ",
                 vocab("Thank you", phonetic="/θæŋk juː/", pos="短语", sense_zh="谢谢"),
                 ".",
-            )
+            ),
+            _para(
+                "柜台前有一位女士。她看着我。我说我想要一杯拿铁。她说好的，给你。",
+                "A woman is at the counter. She looks at me. I say, I'd like a latte. She says, Sure. Here you are.",
+            ),
+            _para(
+                "我接过杯子。拿铁是热的。我说谢谢。我在桌边坐下。",
+                "I take the cup. The latte is hot. I say thank you. I sit down at a table.",
+            ),
         ],
     },
     questions=[
@@ -268,18 +276,26 @@ GREETINGS = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "遇见邻居",
         "paragraphs": [
             _para(
-                "我遇见邻居。你好吗？我很好。很高兴认识你。",
+                "我在楼下遇见邻居。今天是早上。我看着她。我先说你好。",
                 "I meet my ",
                 vocab("neighbor", phonetic="/ˈneɪbər/", pos="名词", sense_zh="邻居"),
-                ". ",
+                " downstairs. It is morning. I look at her. I say hello first.",
+            ),
+            _para(
+                "她问我好吗。我说我很好。她也很好。我们都笑了。",
+                "She asks, ",
                 grammar("How are you", phonetic="/haʊ ɑːr juː/", pos="疑问句", sense_zh="问候近况"),
-                "? I'm fine. ",
+                "? I say, I'm fine. She is fine too. We both smile.",
+            ),
+            _para(
+                "我说很高兴认识你。她也这么说。然后我们去上班。这是新的一天。",
+                "I say, ",
                 vocab("Nice to meet you", phonetic="/naɪs tə miːt juː/", pos="短语", sense_zh="很高兴认识你"),
-                ".",
-            )
+                ". She says it too. Then we go to work. It is a new day.",
+            ),
         ],
     },
     questions=[
@@ -422,10 +438,15 @@ SAY_AGAIN = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "请再说一次",
         "paragraphs": [
             _para(
-                "对不起。我听不懂。请再说一次。",
+                "店员问我要茶还是咖啡。她说得很快。我没有听清。我看着她。",
+                "The clerk asks me about tea or coffee. She speaks fast. I do not hear her well. I look at her.",
+            ),
+            _para(
+                "我说对不起。我听不懂。请再说一次。请慢一点。",
+                "I say, ",
                 vocab("Sorry", phonetic="/ˈsɑːri/", pos="短语", sense_zh="对不起"),
                 ". I ",
                 grammar("don't", phonetic="/doʊnt/", pos="助动词", sense_zh="不（do not 的缩写）"),
@@ -433,8 +454,12 @@ SAY_AGAIN = _lesson(
                 vocab("understand", phonetic="/ˌʌndərˈstænd/", pos="动词", sense_zh="懂、明白"),
                 ". Please ",
                 vocab("say that again", phonetic="/seɪ ðæt əˈɡen/", pos="短语", sense_zh="再说一次"),
-                ".",
-            )
+                ", slowly, please.",
+            ),
+            _para(
+                "她慢一点再说。这次我听懂了。我要茶。我说谢谢。",
+                "She says it again, slowly. I understand this time. I want tea. I say thank you.",
+            ),
         ],
     },
     questions=[
@@ -576,24 +601,32 @@ ASK_DIRECTIONS = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "车站在哪里",
         "paragraphs": [
             _para(
-                "我在街上。打扰一下。车站在哪里？直走，然后左转。",
+                "我在街上。我在找车站。我看见一个人。我说打扰一下。",
                 "I am on the ",
                 vocab("street", phonetic="/striːt/", pos="名词", sense_zh="街道"),
-                ". ",
+                ". I am looking for the station. I see a man. I say, ",
                 vocab("Excuse me", phonetic="/ɪkˈskjuːz miː/", pos="短语", sense_zh="打扰一下"),
-                ". ",
+                ".",
+            ),
+            _para(
+                "我问车站在哪里。他看着那条路。他说直走，然后左转。",
+                "I ask, ",
                 grammar("Where is", phonetic="/wer ɪz/", pos="疑问句", sense_zh="在哪里"),
                 " the ",
                 vocab("station", phonetic="/ˈsteɪʃn/", pos="名词", sense_zh="车站"),
-                "? ",
+                "? He looks at the road. He says, ",
                 vocab("Go straight", phonetic="/ɡoʊ streɪt/", pos="短语", sense_zh="直走"),
                 ", then ",
                 vocab("turn left", phonetic="/tɜːrn left/", pos="短语", sense_zh="左转"),
                 ".",
-            )
+            ),
+            _para(
+                "我说谢谢。我直走。然后我左转。车站就在那边。",
+                "I say thank you. I go straight. Then I turn left. The station is over there.",
+            ),
         ],
     },
     questions=[
@@ -734,20 +767,27 @@ TAKE_BUS = _lesson(
         ),
     ],
     passage={
-        "title_zh": "短文",
+        "title_zh": "坐公交车",
         "paragraphs": [
             _para(
-                "我坐公交车。我想去车站。一张票多少钱？下一站是车站。",
+                "我坐上一班公交车。车上有一些人。我想去车站。我看着售票员。",
                 "I take a ",
                 vocab("bus", phonetic="/bʌs/", pos="名词", sense_zh="公交车"),
-                ". ",
+                ". There are some people on it. ",
                 grammar("I want to go to", phonetic="/aɪ wɑːnt tə ɡoʊ tuː/", pos="动词短语", sense_zh="我想去"),
-                " the station. How much is a ",
+                " the station. I look at the driver.",
+            ),
+            _para(
+                "我问一张票多少钱。售票员看着我。他说两美元。这班车去车站。",
+                "How much is a ",
                 vocab("ticket", phonetic="/ˈtɪkɪt/", pos="名词", sense_zh="票"),
-                "? ",
+                "? The driver looks at me. He says, Two dollars. This bus goes to the station.",
+            ),
+            _para(
+                "我买票。下一站就是车站。车停了。我说谢谢，然后下车。",
                 vocab("The next stop", phonetic="/ðə nekst stɑːp/", pos="短语", sense_zh="下一站"),
-                " is the station.",
-            )
+                " is the station. I buy a ticket. The bus stops. I say thank you and get off.",
+            ),
         ],
     },
     questions=[
@@ -781,15 +821,15 @@ TAKE_BUS = _lesson(
     ],
 )
 
-LESSONS = [*BOOK1_UNIT1, CAFE_ORDER, GREETINGS, SAY_AGAIN, ASK_DIRECTIONS, TAKE_BUS]
-LESSON = CAFE_ORDER
-LESSON_ID = CAFE_ORDER["id"]
-FIRST_LESSON = LESSONS[0]
+LESSONS = [*CET4_UNIT1]
+LESSON = LESSONS[0]
+LESSON_ID = LESSON["id"]
+FIRST_LESSON = LESSON
 FIRST_LESSON_ID = FIRST_LESSON["id"]
-EXPRESSIONS = CAFE_ORDER["expressions"]
-DIALOGUE = CAFE_ORDER["dialogue"]
-QUESTIONS = CAFE_ORDER["questions"]
-GOALS = CAFE_ORDER["goals"]
+EXPRESSIONS = LESSON["expressions"]
+DIALOGUE = LESSON["dialogue"]
+QUESTIONS = LESSON["questions"]
+GOALS = LESSON["goals"]
 
 STEPS = ("vocab", "listen", "talk", "recap", "done")
 STEP_ZH = {
@@ -802,9 +842,9 @@ STEP_ZH = {
 VOCAB_PHASES = ("learn", "recall", "done")
 
 ROADMAP = [
-    {"id": "m1", "month": 1, "title_zh": "入门第一册：引起注意、be、职业与问候", "status": "in_progress"},
-    {"id": "m2", "month": 2, "title_zh": "场景：点餐、问候、请对方再说一次", "status": "pending"},
-    {"id": "m3", "month": 3, "title_zh": "场景：问路、坐车", "status": "pending"},
+    {"id": "m1", "month": 1, "title_zh": "四级精读：校园、邮件、小组、兼职、出行与网传", "status": "in_progress"},
+    {"id": "m2", "month": 2, "title_zh": "下一组精读", "status": "pending"},
+    {"id": "m3", "month": 3, "title_zh": "下一组精读", "status": "pending"},
     {"id": "m4", "month": 4, "title_zh": "酒店入住", "status": "pending"},
     {"id": "m5", "month": 5, "title_zh": "日常闲聊", "status": "pending"},
     {"id": "m6", "month": 6, "title_zh": "把一天串起来", "status": "pending"},

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -12,11 +13,23 @@ from fastapi import HTTPException
 
 from . import ai, seed
 from .dialogue import MODE, MODE_ZH, hint_for, your_lines
-from .srs import REMEMBERED_DAYS, RESULTS, RESULT_ZH, iso, schedule
+from .srs import (
+    KNOWN,
+    KNOWN_DAYS,
+    MARK_RESULTS,
+    REMEMBERED_DAYS,
+    RESULTS,
+    RESULT_ZH,
+    UNKNOWN,
+    iso,
+    schedule,
+    schedule_mark,
+    utcnow,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEARNING_DB = ROOT / "data" / "learning.db"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 STEPS = seed.STEPS
 VOCAB_PHASES = seed.VOCAB_PHASES
 
@@ -119,6 +132,14 @@ def _init_schema(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             FOREIGN KEY (lesson_id) REFERENCES lessons(id)
         );
+        CREATE TABLE IF NOT EXISTS headword_state (
+            headword_id TEXT PRIMARY KEY,
+            result TEXT NOT NULL,
+            box INTEGER NOT NULL,
+            interval_days INTEGER NOT NULL,
+            due_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS review_cards (
             expression_id TEXT PRIMARY KEY,
             english TEXT NOT NULL,
@@ -151,6 +172,7 @@ def _init_schema(connection: sqlite3.Connection) -> None:
     _add_column(connection, "expressions", "example_en", "TEXT NOT NULL DEFAULT ''")
     _add_column(connection, "expressions", "example_zh", "TEXT NOT NULL DEFAULT ''")
     _add_column(connection, "expressions", "mark", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "expressions", "teach_json", "TEXT NOT NULL DEFAULT '{}'")
     _add_column(connection, "lesson_progress", "vocab_phase", "TEXT NOT NULL DEFAULT 'learn'")
     _add_column(connection, "dialogue_lines", "marks_json", "TEXT NOT NULL DEFAULT '[]'")
     _add_column(connection, "lesson_progress", "revision", "INTEGER NOT NULL DEFAULT 1")
@@ -184,8 +206,14 @@ def seed_lesson(connection: sqlite3.Connection) -> None:
     for lesson in seed.LESSONS:
         connection.execute(
             """
-            INSERT OR IGNORE INTO lessons (id, title, title_zh, level, source, source_note)
+            INSERT INTO lessons (id, title, title_zh, level, source, source_note)
             VALUES (:id, :title, :title_zh, :level, :source, :source_note)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                title_zh = excluded.title_zh,
+                level = excluded.level,
+                source = excluded.source,
+                source_note = excluded.source_note
             """,
             lesson,
         )
@@ -194,10 +222,10 @@ def seed_lesson(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO expressions (
                     id, lesson_id, english, chinese, kind, phonetic, note_zh,
-                    example_en, example_zh, mark, audio_url, sort_order
+                    example_en, example_zh, mark, teach_json, audio_url, sort_order
                 ) VALUES (
                     :id, :lesson_id, :english, :chinese, :kind, :phonetic, :note_zh,
-                    :example_en, :example_zh, :mark, NULL, :sort_order
+                    :example_en, :example_zh, :mark, :teach_json, NULL, :sort_order
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     english = excluded.english,
@@ -208,9 +236,10 @@ def seed_lesson(connection: sqlite3.Connection) -> None:
                     example_en = excluded.example_en,
                     example_zh = excluded.example_zh,
                     mark = excluded.mark,
+                    teach_json = excluded.teach_json,
                     sort_order = excluded.sort_order
                 """,
-                {**item, "lesson_id": lesson["id"]},
+                {**item, "lesson_id": lesson["id"], "teach_json": item.get("teach_json") or "{}"},
             )
         for item in lesson["dialogue"]:
             connection.execute(
@@ -356,7 +385,7 @@ def _marks_out(raw) -> list[dict]:
     last_end = 0
     for item in items or []:
         kind = item.get("kind")
-        if kind not in ("vocab", "grammar"):
+        if kind not in ("vocab", "grammar", "phrase"):
             continue
         try:
             start = int(item.get("start"))
@@ -393,6 +422,40 @@ def _paragraphs_out(raw) -> list[dict]:
             }
         )
     return paragraphs
+
+
+def _teach_out(raw) -> dict:
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    def pairs(key: str) -> list[dict]:
+        out: list[dict] = []
+        for item in data.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            zh = str(item.get("zh") or "").strip()
+            en = str(item.get("en") or "").strip()
+            if zh or en:
+                out.append({"zh": zh, "en": en})
+        return out
+
+    why_lines = [str(line).strip() for line in data.get("why_lines") or [] if str(line).strip()]
+    teach = {
+        "ask": str(data.get("ask") or "").strip(),
+        "ask_en": str(data.get("ask_en") or "").strip(),
+        "ask_zh": str(data.get("ask_zh") or "").strip(),
+        "replies": pairs("replies"),
+        "swaps": pairs("swaps"),
+        "why_title": str(data.get("why_title") or "").strip(),
+        "why_lines": why_lines,
+    }
+    if not any([teach["ask"], teach["ask_en"], teach["replies"], teach["swaps"], teach["why_title"], teach["why_lines"]]):
+        return {}
+    return teach
 
 
 def _passage_out(connection: sqlite3.Connection, lesson_id: str) -> dict | None:
@@ -442,6 +505,7 @@ def lesson_payload(lesson_id: str) -> dict:
                 "example_en": row["example_en"] if "example_en" in row.keys() else "",
                 "example_zh": row["example_zh"] if "example_zh" in row.keys() else "",
                 "mark": row["mark"] if "mark" in row.keys() else "",
+                "teach": _teach_out(row["teach_json"] if "teach_json" in row.keys() else ""),
                 "audio": "system" if not row["audio_url"] else "file",
                 "audio_label": "系统朗读" if not row["audio_url"] else "课文音频",
             }
@@ -482,7 +546,61 @@ def lesson_payload(lesson_id: str) -> dict:
             ],
             "task": lesson_meta(lesson_id)["task"],
             "progress": _progress_out(_progress_row(connection, lesson_id), lesson_id),
+            "chat": ai.chat_status(),
         }
+
+
+def explain_expression(lesson_id: str, expression_id: str, question: str = "") -> dict:
+    with connect() as connection:
+        lesson = _lesson_row(connection, lesson_id)
+        row = connection.execute(
+            "SELECT * FROM expressions WHERE id = ? AND lesson_id = ?",
+            (expression_id, lesson_id),
+        ).fetchone()
+        if row is None:
+            row = connection.execute("SELECT * FROM expressions WHERE id = ?", (expression_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="没有这条表达。")
+        item = {
+            "title_zh": lesson["title_zh"],
+            "english": row["english"],
+            "chinese": row["chinese"],
+            "kind": row["kind"] if "kind" in row.keys() else "",
+            "note_zh": row["note_zh"] if "note_zh" in row.keys() else "",
+            "phonetic": row["phonetic"] if "phonetic" in row.keys() else "",
+            "example_en": row["example_en"] if "example_en" in row.keys() else "",
+            "example_zh": row["example_zh"] if "example_zh" in row.keys() else "",
+            "teach": _teach_out(row["teach_json"] if "teach_json" in row.keys() else ""),
+            "question": _explain_question(question),
+        }
+    if not ai.chat_available():
+        raise HTTPException(status_code=503, detail="还没配 DeepSeek。把密钥写进 .env 后重启服务。")
+    try:
+        return ai.explain_grammar(item)
+    except ai.ChatError as exc:
+        raise HTTPException(status_code=503, detail=_explain_error_zh(exc)) from exc
+
+
+def _explain_question(raw) -> str:
+    if raw is None or raw == "":
+        return ""
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="问题格式不对。")
+    text = raw.strip()
+    if len(text) > 200:
+        raise HTTPException(status_code=400, detail="问题太长，先缩短再问。")
+    return text
+
+
+def _explain_error_zh(exc: Exception) -> str:
+    code = str(exc)
+    if code == "empty":
+        return "DeepSeek 没有返回讲解，请再试一次。"
+    if code in {"http 401", "http 403"}:
+        return "DeepSeek 密钥无效，检查 .env 后重启服务。"
+    if code == "http 402":
+        return "DeepSeek 余额不足。"
+    return "DeepSeek 暂时不可用，过一会儿再试。"
 
 
 def lesson_meta(lesson_id: str) -> dict:
@@ -502,6 +620,218 @@ def _current_lesson(connection: sqlite3.Connection) -> tuple[dict, dict, bool]:
     return last, last_progress, True
 
 
+def headword_id(headword: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (headword or "").strip().lower()).strip("-")
+
+
+def _mark_is_visible(state_row, now: str) -> bool:
+    if state_row is None:
+        return True
+    if state_row["result"] == UNKNOWN:
+        return True
+    return str(state_row["due_at"]) <= now
+
+
+def _headword_states(connection) -> dict:
+    return {row["headword_id"]: row for row in connection.execute("SELECT * FROM headword_state")}
+
+
+def _expression_for_headword(connection, headword: str):
+    hw_id = headword_id(headword)
+    if not hw_id:
+        return None
+    row = connection.execute("SELECT * FROM expressions WHERE id = ?", (f"hw.{hw_id}",)).fetchone()
+    if row is not None:
+        return row
+    return connection.execute(
+        "SELECT * FROM expressions WHERE lower(english) = lower(?) LIMIT 1",
+        (headword.strip(),),
+    ).fetchone()
+
+
+def readings_list() -> dict:
+    now = iso()
+    with connect() as connection:
+        states = _headword_states(connection)
+        items = []
+        for lesson in seed.LESSONS:
+            passage = _passage_out(connection, lesson["id"])
+            paras = (passage or {}).get("paragraphs") or []
+            words = sum(len((para.get("english") or "").split()) for para in paras)
+            marks = [mark for para in paras for mark in para.get("marks") or []]
+            visible = [
+                mark
+                for mark in marks
+                if _mark_is_visible(states.get(headword_id(mark.get("headword") or "")), now)
+            ]
+            progress = _progress_out(_progress_row(connection, lesson["id"]), lesson["id"])
+            items.append(
+                {
+                    "id": lesson["id"],
+                    "title": lesson["title"],
+                    "title_zh": lesson["title_zh"],
+                    "level": lesson["level"],
+                    "word_count": words,
+                    "mark_total": len(marks),
+                    "mark_visible": len(visible),
+                    "done": progress["step"] == "done",
+                }
+            )
+        return {"items": items}
+
+
+def _decorate_marks(paragraphs: list[dict], states: dict, now: str) -> list[dict]:
+    out = []
+    for para in paragraphs:
+        kept = []
+        for mark in para.get("marks") or []:
+            hw = headword_id(mark.get("headword") or "")
+            state = states.get(hw)
+            shown = _mark_is_visible(state, now)
+            status = "unknown"
+            if state is not None:
+                if state["result"] == KNOWN and shown:
+                    status = "due"
+                elif state["result"] == KNOWN:
+                    status = KNOWN
+                else:
+                    status = "unknown"
+            item = {**mark, "headword_id": hw, "status": status}
+            if shown:
+                kept.append(item)
+        out.append({**para, "marks": kept})
+    return out
+
+
+def reading_payload(lesson_id: str) -> dict:
+    payload = lesson_payload(lesson_id)
+    now = iso()
+    with connect() as connection:
+        states = _headword_states(connection)
+    passage = payload.get("passage") or {}
+    paragraphs = _decorate_marks(passage.get("paragraphs") or [], states, now)
+    payload["passage"] = {**passage, "paragraphs": paragraphs} if passage else None
+    return payload
+
+
+def _vocab_item(expr, hw_id: str, status: str, due_at: str, box: int) -> dict:
+    return {
+        "id": expr["id"],
+        "headword_id": hw_id,
+        "lesson_id": expr["lesson_id"] if "lesson_id" in expr.keys() else "",
+        "english": expr["english"],
+        "chinese": expr["chinese"],
+        "kind": expr["kind"],
+        "phonetic": expr["phonetic"] if "phonetic" in expr.keys() else "",
+        "note_zh": expr["note_zh"] if "note_zh" in expr.keys() else "",
+        "example_en": expr["example_en"] if "example_en" in expr.keys() else "",
+        "example_zh": expr["example_zh"] if "example_zh" in expr.keys() else "",
+        "teach": _teach_out(expr["teach_json"] if "teach_json" in expr.keys() else ""),
+        "status": status,
+        "due_at": due_at,
+        "box": box,
+    }
+
+
+def vocab_queue() -> dict:
+    now = iso()
+    with connect() as connection:
+        states = _headword_states(connection)
+        due_items = []
+        unknown_items = []
+        for expr in connection.execute(
+            "SELECT * FROM expressions WHERE id LIKE 'hw.%' ORDER BY lesson_id, sort_order, id"
+        ):
+            hw_id = expr["id"][3:]
+            state = states.get(hw_id)
+            if state is None or state["result"] != KNOWN:
+                unknown_items.append(_vocab_item(expr, hw_id, "unknown", "", 0))
+                continue
+            if str(state["due_at"]) > now:
+                continue
+            due_items.append(
+                _vocab_item(expr, hw_id, "due", state["due_at"], int(state["box"]))
+            )
+        return {"items": due_items + unknown_items}
+
+
+def talk_topics() -> dict:
+    return {
+        "items": [
+            {"id": lesson["id"], "title": lesson["title"], "title_zh": lesson["title_zh"]}
+            for lesson in seed.LESSONS
+        ]
+    }
+
+
+def mark_headword(headword: str, result: str) -> dict:
+    mapping = {"会": KNOWN, "不会": UNKNOWN, "known": KNOWN, "unknown": UNKNOWN}
+    if isinstance(result, str) and result in mapping:
+        result = mapping[result]
+    if result not in MARK_RESULTS:
+        raise HTTPException(status_code=400, detail="只能选会或不会。")
+    hw_id = headword_id(headword)
+    if not hw_id:
+        raise HTTPException(status_code=400, detail="缺少词条。")
+    now = iso()
+    with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        expr = _expression_for_headword(connection, headword)
+        if expr is None:
+            raise HTTPException(status_code=404, detail="没有这个词条。")
+        prior = connection.execute(
+            "SELECT * FROM headword_state WHERE headword_id = ?", (hw_id,)
+        ).fetchone()
+        prior_result = prior["result"] if prior is not None else None
+        prior_box = int(prior["box"]) if prior is not None else 0
+        box, days, due_at = schedule_mark(prior_box, result, prior=prior_result, now=utcnow())
+        connection.execute(
+            """
+            INSERT INTO headword_state (headword_id, result, box, interval_days, due_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(headword_id) DO UPDATE SET
+                result = excluded.result,
+                box = excluded.box,
+                interval_days = excluded.interval_days,
+                due_at = excluded.due_at,
+                updated_at = excluded.updated_at
+            """,
+            (hw_id, result, box, days, due_at, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO review_cards (
+                expression_id, english, chinese, box, interval_days, due_at, last_result, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(expression_id) DO UPDATE SET
+                box = excluded.box,
+                interval_days = excluded.interval_days,
+                due_at = excluded.due_at,
+                last_result = excluded.last_result,
+                updated_at = excluded.updated_at
+            """,
+            (expr["id"], expr["english"], expr["chinese"], box, days, due_at, result, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO review_log (expression_id, result, due_at, created_at, operation_id)
+            VALUES (?, ?, ?, ?, NULL)
+            """,
+            (expr["id"], result, due_at, now),
+        )
+        saved = connection.execute(
+            "SELECT * FROM headword_state WHERE headword_id = ?", (hw_id,)
+        ).fetchone()
+        return {
+            "headword_id": saved["headword_id"],
+            "result": saved["result"],
+            "box": saved["box"],
+            "interval_days": saved["interval_days"],
+            "due_at": saved["due_at"],
+            "expression_id": expr["id"],
+        }
+
+
 def today() -> dict:
     with connect() as connection:
         lesson, progress, all_done = _current_lesson(connection)
@@ -512,14 +842,14 @@ def today() -> dict:
         step = progress["step"]
         index = seed.lesson_index(lesson["id"])
         if all_done:
-            action = "再看这一课"
-            page = "today"
+            action = "再看阅读"
+            page = "reading"
         elif progress["updated_at"] is None:
-            action = "开始第一课" if index == 1 else f"开始第 {index} 课"
-            page = "vocab"
+            action = "去阅读"
+            page = "reading"
         else:
-            action = "去复盘" if step == "recap" else f"继续：{seed.STEP_ZH[step]}"
-            page = {"vocab": "vocab", "listen": "reading", "talk": "talk", "recap": "today"}.get(step, "today")
+            action = "继续阅读"
+            page = "reading"
         lessons = []
         for item in seed.LESSONS:
             item_progress = _progress_out(_progress_row(connection, item["id"]), item["id"])
@@ -529,10 +859,10 @@ def today() -> dict:
                 label = "已完成"
             elif item["id"] == lesson["id"] and not all_done:
                 status = "current"
-                label = seed.STEP_ZH.get(item_progress["step"], item_progress["step"])
+                label = "正在读"
             else:
-                status = "upcoming"
-                label = "还没开始"
+                status = "unread"
+                label = "可读"
             lessons.append(
                 {
                     "id": item["id"],
@@ -745,7 +1075,7 @@ def due_cards() -> list[dict]:
             "SELECT * FROM review_cards WHERE due_at <= ? ORDER BY due_at, expression_id",
             (iso(),),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [dict(row) for row in rows if row["last_result"] not in MARK_RESULTS]
 
 
 def review_log(limit: int = 20) -> list[dict]:

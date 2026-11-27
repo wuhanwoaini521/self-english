@@ -77,9 +77,9 @@ class DeepSeekTalkTest(unittest.TestCase):
                         "content": json.dumps(
                             {
                                 "goal_ids": [
-                                    f"{self.seed.FIRST_LESSON_ID}.goal-excuse",
-                                    f"{self.seed.FIRST_LESSON_ID}.goal-yours",
-                                    f"{self.seed.FIRST_LESSON_ID}.goal-thanks",
+                                    f"{self.seed.FIRST_LESSON_ID}.goal-drop",
+                                    f"{self.seed.FIRST_LESSON_ID}.goal-deadline",
+                                    f"{self.seed.FIRST_LESSON_ID}.goal-reason",
                                 ],
                                 "reply_en": "Yes, it is. Thank you.",
                                 "coach_zh": "问法对了。",
@@ -93,7 +93,7 @@ class DeepSeekTalkTest(unittest.TestCase):
         with patch("app.ai.chat._post_json", return_value=fake) as posted:
             state = self.learning.submit_order(
                 self.seed.FIRST_LESSON_ID,
-                "Excuse me. Is this phone yours? Thanks.",
+                "I would rather drop the elective before the deadline. The workload is too heavy.",
             )
         self.assertEqual(posted.call_count, 1)
         headers = posted.call_args.args[1]
@@ -110,12 +110,133 @@ class DeepSeekTalkTest(unittest.TestCase):
         with patch("app.ai.chat._post_json", side_effect=ChatError("unavailable")):
             state = self.learning.submit_order(
                 self.seed.FIRST_LESSON_ID,
-                "Excuse me. Is this your phone? Thank you.",
+                "I would rather drop the elective before the deadline. The workload is too heavy.",
             )
         self.assertEqual(len(state["completed_goals"]), 3)
         self.assertEqual(state["mode"], "script")
         self.assertTrue(state["degraded"])
         self.assertIn("关键词", state["coach_zh"])
+
+    def test_grammar_explain_returns_chinese_note(self):
+        expression_id = "hw.would-rather"
+        fake = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"explain_zh": "提问时把 is 放到句首，句尾用问号。"},
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+        with patch("app.ai.chat._post_json", return_value=fake) as posted:
+            result = self.learning.explain_expression(self.seed.FIRST_LESSON_ID, expression_id)
+        self.assertEqual(result["explain_zh"], "提问时把 is 放到句首，句尾用问号。")
+        self.assertEqual(result["mode"], "deepseek")
+        payload = posted.call_args.args[2]
+        blob = json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertIn("would rather", blob)
+        self.assertNotIn("sk-test-secret", blob)
+        self.assertNotIn("review", blob.lower())
+        self.assertNotIn("dialogue", blob.lower())
+
+    def test_grammar_explain_without_key(self):
+        os.environ["SELF_ENGLISH_AI_PROVIDER"] = "off"
+        with self.assertRaises(HTTPException) as raised:
+            self.learning.explain_expression(
+                self.seed.FIRST_LESSON_ID,
+                "hw.would-rather",
+            )
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("DeepSeek", raised.exception.detail)
+
+    def test_grammar_explain_unknown_expression(self):
+        with self.assertRaises(HTTPException) as raised:
+            self.learning.explain_expression(self.seed.FIRST_LESSON_ID, "nope.missing")
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_grammar_explain_failure_has_retry_message(self):
+        from app.ai.chat import ChatError
+
+        with patch("app.ai.chat._post_json", side_effect=ChatError("unavailable")):
+            with self.assertRaises(HTTPException) as raised:
+                self.learning.explain_expression(
+                    self.seed.FIRST_LESSON_ID,
+                    "hw.would-rather",
+                )
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("不可用", raised.exception.detail)
+        self.assertNotIn("sk-test-secret", raised.exception.detail)
+
+    def test_grammar_explain_empty_content(self):
+        fake = {"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning_content": "..."}}]}
+        with patch("app.ai.chat._post_json", return_value=fake):
+            with self.assertRaises(HTTPException) as raised:
+                self.learning.explain_expression(
+                    self.seed.FIRST_LESSON_ID,
+                    "hw.would-rather",
+                )
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("没有返回", raised.exception.detail)
+
+    def test_grammar_explain_forwards_question(self):
+        fake = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"explain_zh": "简短回答要用 Yes, I am."}, ensure_ascii=False)
+                    }
+                }
+            ]
+        }
+        with patch("app.ai.chat._post_json", return_value=fake) as posted:
+            result = self.learning.explain_expression(
+                self.seed.FIRST_LESSON_ID,
+                "hw.would-rather",
+                "为什么不能说 Yes, I'm?",
+            )
+        self.assertEqual(result["explain_zh"], "简短回答要用 Yes, I am.")
+        payload = json.dumps(posted.call_args.args[2], ensure_ascii=False)
+        self.assertIn("Yes, I'm?", payload)
+        self.assertNotIn("sk-test-secret", payload)
+
+    def test_phrase_explain_forwards_note(self):
+        fake = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"explain_zh": "Excuse me 用来引起陌生人注意，借过或提问前先说。"},
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+        with patch("app.ai.chat._post_json", return_value=fake) as posted:
+            result = self.learning.explain_expression(
+                self.seed.FIRST_LESSON_ID,
+                "hw.deadline",
+            )
+        self.assertEqual(result["explain_zh"], "Excuse me 用来引起陌生人注意，借过或提问前先说。")
+        payload = json.dumps(posted.call_args.args[2], ensure_ascii=False)
+        self.assertIn("deadline", payload)
+        self.assertIn("截止", payload)
+        self.assertIn("word", payload)
+        self.assertIn("word, phrase, or pattern", payload)
+        self.assertNotIn("sk-test-secret", payload)
+
+    def test_grammar_explain_rejects_long_question(self):
+        with self.assertRaises(HTTPException) as raised:
+            self.learning.explain_expression(
+                self.seed.FIRST_LESSON_ID,
+                "hw.would-rather",
+                "问" * 201,
+            )
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_voice_session_does_not_open(self):
         from app.main import voice_session

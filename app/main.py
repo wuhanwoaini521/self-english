@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -76,6 +76,32 @@ def today() -> dict:
     return learning.today()
 
 
+@app.get("/api/readings")
+def readings() -> dict:
+    return learning.readings_list()
+
+
+@app.get("/api/readings/{lesson_id}")
+def reading(lesson_id: str) -> dict:
+    return learning.reading_payload(lesson_id)
+
+
+@app.post("/api/headwords/{headword}/mark")
+def post_headword_mark(headword: str, body: dict | None = Body(default=None)) -> dict:
+    result = (body or {}).get("result")
+    return learning.mark_headword(headword, result)
+
+
+@app.get("/api/vocab/queue")
+def vocab_queue() -> dict:
+    return learning.vocab_queue()
+
+
+@app.get("/api/talk/topics")
+def talk_topics() -> dict:
+    return learning.talk_topics()
+
+
 @app.get("/api/lessons/{lesson_id}")
 def lesson(lesson_id: str) -> dict:
     return learning.lesson_payload(lesson_id)
@@ -134,6 +160,14 @@ def dialogue_hint(lesson_id: str) -> dict:
 @app.post("/api/dialogue/{lesson_id}/order")
 def dialogue_order(lesson_id: str, body: dict) -> dict:
     return learning.submit_order(lesson_id, body.get("text", ""), body.get("expected_revision"))
+
+
+@app.post("/api/lessons/{lesson_id}/expressions/{expression_id}/explain")
+def explain_expression(lesson_id: str, expression_id: str, body: dict | None = Body(default=None)) -> dict:
+    question = ""
+    if isinstance(body, dict):
+        question = body.get("question") or ""
+    return learning.explain_expression(lesson_id, expression_id, question)
 
 
 @app.get("/api/ai/status")

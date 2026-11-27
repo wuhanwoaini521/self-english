@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 SOURCE_NOTE = "本课为 self-english 原创种子，供个人学习。无真人录音，朗读使用设备系统语音。"
-MARK_KINDS = ("vocab", "grammar")
+MARK_KINDS = ("vocab", "grammar", "phrase")
 
 
 def _mark(text: str, *, kind: str, phonetic: str, pos: str, sense_zh: str, headword: str = "") -> dict:
@@ -25,6 +28,10 @@ def vocab(text: str, *, phonetic: str, pos: str, sense_zh: str, headword: str = 
 
 def grammar(text: str, *, sense_zh: str, phonetic: str = "", pos: str = "语法", headword: str = "") -> dict:
     return _mark(text, kind="grammar", phonetic=phonetic, pos=pos, sense_zh=sense_zh, headword=headword)
+
+
+def phrase(text: str, *, phonetic: str, sense_zh: str, headword: str = "") -> dict:
+    return _mark(text, kind="phrase", phonetic=phonetic, pos="短语", sense_zh=sense_zh, headword=headword)
 
 
 def join_parts(parts: tuple[object, ...]) -> tuple[str, list[dict]]:
@@ -78,6 +85,7 @@ def _expr(
     example_en: str,
     example_zh: str,
     mark: str,
+    teach: dict | None = None,
 ) -> dict:
     return {
         "slug": slug,
@@ -89,7 +97,37 @@ def _expr(
         "example_en": example_en,
         "example_zh": example_zh,
         "mark": mark,
+        "teach": teach or {},
     }
+
+
+def _fill_exprs_from_passage(expressions: list[dict], passage: dict | None) -> list[dict]:
+    have = {item["slug"] for item in expressions}
+    extra: list[dict] = []
+    for para in (passage or {}).get("paragraphs") or []:
+        example_en = para.get("english") or ""
+        example_zh = para.get("chinese") or ""
+        for mark in para.get("marks") or []:
+            hw = (mark.get("headword") or mark.get("text") or "").strip()
+            slug = re.sub(r"[^a-z0-9]+", "-", hw.lower()).strip("-")
+            if not slug or slug in have:
+                continue
+            have.add(slug)
+            kind = mark.get("kind") or "vocab"
+            extra.append(
+                _expr(
+                    slug,
+                    hw,
+                    mark.get("sense_zh") or "",
+                    kind="word" if kind == "vocab" else kind,
+                    phonetic=mark.get("phonetic") or "",
+                    note_zh=mark.get("sense_zh") or "",
+                    example_en=example_en,
+                    example_zh=example_zh,
+                    mark="📝" if kind == "vocab" else ("📘" if kind == "grammar" else "💬"),
+                )
+            )
+    return [*expressions, *extra]
 
 
 def _lesson(
@@ -110,12 +148,14 @@ def _lesson(
     passage: dict,
     month: int = 1,
     source_note: str | None = None,
+    level: str = "A1",
 ) -> dict:
+    expressions = _fill_exprs_from_passage(list(expressions), passage)
     return {
         "id": lesson_id,
         "title": title,
         "title_zh": title_zh,
-        "level": "A1",
+        "level": level,
         "month": month,
         "source": "original",
         "source_note": source_note or SOURCE_NOTE,
@@ -129,7 +169,7 @@ def _lesson(
         },
         "expressions": [
             {
-                "id": f"{lesson_id}.{item['slug']}",
+                "id": f"hw.{item['slug']}",
                 "english": item["english"],
                 "chinese": item["chinese"],
                 "kind": item["kind"],
@@ -138,6 +178,7 @@ def _lesson(
                 "example_en": item["example_en"],
                 "example_zh": item["example_zh"],
                 "mark": item["mark"],
+                "teach_json": json.dumps(item.get("teach") or {}, ensure_ascii=False),
                 "sort_order": index,
             }
             for index, item in enumerate(expressions, start=1)
